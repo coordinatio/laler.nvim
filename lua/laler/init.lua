@@ -153,11 +153,17 @@ end
 --- (`v`) and line1/line2 match `'<`/`'>`, capture columns via `from_visual()`.
 --- Linewise `V` (or a range that does not match the marks) stays linewise.
 --- Blockwise `\22` is not supported as char capture; fall back to linewise.
+--- Bare `:Laler` (`opts.range == 0` / nil) always uses the command line range
+--- so leftover `'<`/`'>` from a prior char visual is not reused.
 ---@param line1 integer
 ---@param line2 integer
+---@param range_count? integer `opts.range` from the user command (0 = no range)
 ---@return laler.Range?, string?
-function M.range_from_command(line1, line2)
+function M.range_from_command(line1, line2, range_count)
   local capture = require("laler.range")
+  if range_count == nil or range_count < 2 then
+    return capture:from_command_range(line1, line2)
+  end
   local vm = vim.fn.visualmode()
   if vm == "\22" then
     return capture:from_command_range(line1, line2)
@@ -179,9 +185,10 @@ end
 ---@param line1 integer
 ---@param line2 integer
 ---@param prompt_id? string
-function M.run_command(line1, line2, prompt_id)
+---@param range_count? integer
+function M.run_command(line1, line2, prompt_id, range_count)
   M.setup_if_needed()
-  local range, err = M.range_from_command(line1, line2)
+  local range, err = M.range_from_command(line1, line2, range_count)
   if not range then
     vim.notify("laler: " .. (err or "invalid range"), vim.log.levels.WARN)
     return
@@ -189,9 +196,12 @@ function M.run_command(line1, line2, prompt_id)
   session.run_with_range(range, prompt_id ~= "" and prompt_id or nil)
 end
 
-function M.pick_command(line1, line2)
+---@param line1 integer
+---@param line2 integer
+---@param range_count? integer
+function M.pick_command(line1, line2, range_count)
   M.setup_if_needed()
-  local range, err = M.range_from_command(line1, line2)
+  local range, err = M.range_from_command(line1, line2, range_count)
   if not range then
     vim.notify("laler: " .. (err or "invalid range"), vim.log.levels.WARN)
     return

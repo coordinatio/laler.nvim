@@ -52,6 +52,21 @@ local function variant_list(n)
 end
 
 local MARKER_SUFFIX_CAP = 256
+local MARKER_NONCE_CAP = 256
+local random_seeded = false
+
+local function ensure_randomseed()
+  if random_seeded then
+    return
+  end
+  random_seeded = true
+  local seed = os.time()
+  local hr = vim.uv and vim.uv.hrtime or (vim.loop and vim.loop.hrtime)
+  if hr then
+    seed = seed + (hr() % 100000000)
+  end
+  math.randomseed(seed)
+end
 
 ---@param text string
 ---@return string, string
@@ -68,7 +83,18 @@ local function unique_markers(text)
     end
     n = n + 1
   end
-  local token = tostring(os.time()) .. "x" .. tostring(math.random(1000, 9999))
+  ensure_randomseed()
+  local extra = 0
+  while extra < MARKER_NONCE_CAP do
+    extra = extra + 1
+    local token = tostring(os.time()) .. "x" .. tostring(math.random(100000, 999999)) .. "x" .. tostring(extra)
+    local open = "<<<LALER_TEXT_" .. token .. ">>>"
+    local close = "<<<END_LALER_TEXT_" .. token .. ">>>"
+    if not text:find(open, 1, true) and not text:find(close, 1, true) then
+      return open, close
+    end
+  end
+  local token = tostring(os.time()) .. "x" .. tostring(math.random(100000, 999999)) .. "xfail"
   return "<<<LALER_TEXT_" .. token .. ">>>", "<<<END_LALER_TEXT_" .. token .. ">>>"
 end
 

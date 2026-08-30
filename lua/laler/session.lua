@@ -18,6 +18,15 @@ M.MAX_RANGE_LINES = 10000
 ---@param c laler.SessionCtx
 function M.bind(c)
   ctx = c
+  request_gen = 0
+  pick_gen = 0
+  active = nil
+  pending_pick_range = nil
+end
+
+--- Test helper: in-flight review/job, or nil when stopped.
+function M._active()
+  return active
 end
 
 ---@return laler.SessionCtx
@@ -176,6 +185,8 @@ local function make_callbacks()
         active.original = range.text
       end
       if reject_empty(range) or reject_oversize(range) then
+        -- Close UI and drop `active` so Apply cannot write a vanished span.
+        stop_session()
         return
       end
       M._start_job(range, prompt_id)
@@ -195,7 +206,11 @@ function M._show_current()
     return
   end
   local variant = active.variants[active.index]
-  local diff_doc = c.diff:diff(active.original or active.range.text, variant.text)
+  local shown = variant.text
+  if c.apply and c.apply.normalize_apply_text then
+    shown = c.apply.normalize_apply_text(shown)
+  end
+  local diff_doc = c.diff:diff(active.original or active.range.text, shown)
   ---@type laler.ReviewState
   local state = {
     prompt_id = active.prompt_id,
@@ -250,49 +265,71 @@ function M._start_job(range, prompt_id)
     n_variants = c.config.n_variants or 3,
   })
 
+  -- Capture cwd before the float steals the window (window-local :lcd).
+  local cwd = vim.fn.getcwd()
   local callbacks = make_callbacks()
   c.view:open_loading({ prompt_id = prompt_id, adapter_name = c.llm.name }, callbacks)
 
-  local spec = c.llm:request(composed)
-  c.jobs:start(spec, {
-    on_exit = function(ok, stdout, stderr, code, signal)
-      if not active or active.gen ~= gen then
-        return
-      end
-      if not ok then
-        local msg
-        local timed_out = code == 124 or (signal or 0) ~= 0
-        if timed_out then
-          local ms = c.config and c.config.timeout_ms
-          if ms then
-            msg = "timed out after " .. tostring(ms) .. " ms"
+  local ok_req, spec = pcall(function()
+    return c.llm:request(composed)
+  end)
+  if not ok_req then
+    c.view:show_error(tostring(spec), nil, make_callbacks())
+    return
+  end
+  if type(spec) ~= "table" or type(spec.cmd) ~= "string" or spec.cmd == "" then
+    c.view:show_error("invalid command", nil, make_callbacks())
+    return
+  end
+  if spec.cwd == nil then
+    spec.cwd = cwd
+  end
+
+  local ok_start, start_err = pcall(function()
+    c.jobs:start(spec, {
+      on_exit = function(ok, stdout, stderr, code, signal)
+        if not active or active.gen ~= gen then
+          return
+        end
+        if not ok then
+          local msg
+          if code == 124 then
+            local ms = c.config and c.config.timeout_ms
+            if ms then
+              msg = "timed out after " .. tostring(ms) .. " ms"
+            else
+              msg = "timed out"
+            end
+          elseif signal and signal ~= 0 then
+            msg = "killed by signal " .. tostring(signal)
           else
-            msg = "timed out"
+            msg = "command failed (exit " .. tostring(code) .. ")"
           end
-        else
-          msg = "command failed (exit " .. tostring(code) .. ")"
+          if stderr and stderr ~= "" then
+            msg = msg .. ": " .. vim.trim(stderr):sub(1, 200)
+          end
+          active.raw = (stdout or "") .. (stderr ~= "" and ("\n" .. stderr) or "")
+          c.view:show_error(msg, active.raw, make_callbacks())
+          return
         end
-        if stderr and stderr ~= "" then
-          msg = msg .. ": " .. vim.trim(stderr):sub(1, 200)
+
+        local parsed_ok, result = c.parser:parse(stdout)
+        if not parsed_ok then
+          active.raw = stdout
+          c.view:show_error(tostring(result), stdout, make_callbacks())
+          return
         end
-        active.raw = (stdout or "") .. (stderr ~= "" and ("\n" .. stderr) or "")
-        c.view:show_error(msg, active.raw, make_callbacks())
-        return
-      end
 
-      local parsed_ok, result = c.parser:parse(stdout)
-      if not parsed_ok then
-        active.raw = stdout
-        c.view:show_error(tostring(result), stdout, make_callbacks())
-        return
-      end
-
-      c.catalog:remember(prompt_id)
-      active.variants = result
-      active.index = 1
-      M._show_current()
-    end,
-  }, { timeout_ms = c.config.timeout_ms })
+        c.catalog:remember(prompt_id)
+        active.variants = result
+        active.index = 1
+        M._show_current()
+      end,
+    }, { timeout_ms = c.config.timeout_ms })
+  end)
+  if not ok_start then
+    c.view:show_error(tostring(start_err), nil, make_callbacks())
+  end
 end
 
 ---@param range laler.Range

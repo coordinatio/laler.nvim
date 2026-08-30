@@ -1,6 +1,17 @@
 ---@implements laler.DiffEngine
 local M = {}
 
+---@param a string
+---@param b string
+---@param opts table
+---@return any
+local function nvim_diff(a, b, opts)
+  if vim.text and vim.text.diff then
+    return vim.text.diff(a, b, opts)
+  end
+  return vim.diff(a, b, opts)
+end
+
 ---@param s string
 ---@return string[]
 local function split_lines(s)
@@ -156,7 +167,7 @@ local function seq_diff_indices(a, b)
   if a_s == b_s then
     return {}
   end
-  local indices = vim.diff(a_s, b_s, {
+  local indices = nvim_diff(a_s, b_s, {
     result_type = "indices",
     algorithm = "histogram",
   })
@@ -248,7 +259,7 @@ function M:diff(original, variant)
     return { lines = lines, word_spans = word_spans }
   end
 
-  local indices = vim.diff(old_s .. "\n", new_s .. "\n", {
+  local indices = nvim_diff(old_s .. "\n", new_s .. "\n", {
     result_type = "indices",
     algorithm = "histogram",
     linematch = 120,

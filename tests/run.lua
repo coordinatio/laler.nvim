@@ -951,7 +951,9 @@ do
   session._start_job(range, "correct")
   jobs.cbs[#jobs.cbs].on_exit(false, "", "", 0, 9)
   last_err = errors[#errors]
-  assert_true(last_err:find("timed out", 1, true) ~= nil, "SIGKILL is treated as timeout")
+  assert_true(last_err:find("killed by signal", 1, true) ~= nil, "SIGKILL says killed by signal")
+  assert_true(last_err:find("9", 1, true) ~= nil, "signal number in message")
+  assert_true(last_err:find("timed out", 1, true) == nil, "SIGKILL is not timeout")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
@@ -1139,7 +1141,7 @@ do
   vim.cmd("normal! 0fbv2l")
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   assert_eq(vim.fn.visualmode(), "v", "last visual is char")
-  local range, err = laler.range_from_command(1, 1)
+  local range, err = laler.range_from_command(1, 1, 2)
   assert_true(range ~= nil, "char visual command range " .. tostring(err))
   assert_eq(range.mode, "char", "char visual stays char-wise")
   assert_eq(range.text, "bar", "char visual captures substring not whole line")
@@ -1151,7 +1153,7 @@ do
   session.run_with_range = function(r)
     got = r
   end
-  laler.run_command(1, 1)
+  laler.run_command(1, 1, nil, 2)
   session.run_with_range = orig_run
   assert_true(got ~= nil, "run_command captured")
   assert_eq(got.text, "bar", "run_command char visual text")
@@ -1193,6 +1195,12 @@ do
   end)
   assert_true(not ok, "generic requires cmd or build")
   assert_true(tostring(err):find("laler:", 1, true) ~= nil, "generic error laler: prefix")
+
+  ok, err = pcall(function()
+    require("laler.llm.generic").new({ cmd = {} }):request("x")
+  end)
+  assert_true(not ok, "empty cmd table errors")
+  assert_true(tostring(err):find("laler:", 1, true) ~= nil, "empty cmd laler: prefix")
 end
 
 -- wait(0) is not used to probe cancel; nvim version guard in plugin
@@ -1406,22 +1414,25 @@ do
   local last_ch = expected:sub(-1)
   assert_eq(range.text:sub(-1), last_ch, "last character kept after Esc")
 
-  local cmd_range, cerr = laler.range_from_command(1, 1)
+  local cmd_range, cerr = laler.range_from_command(1, 1, 2)
   assert_true(cmd_range ~= nil, "exclusive after Esc command " .. tostring(cerr))
   assert_eq(cmd_range.text, expected, "exclusive command range includes last char")
   vim.o.selection = old_sel
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
--- child env blanks NVIM*; adapter env still wins
+-- child env unsets NVIM*; adapter env still wins
 do
   local job = require("laler.job.vim_system")
   local env = job._child_env({ OPENCODE_PERMISSION = "deny" })
-  assert_eq(env.NVIM, "", "NVIM blanked")
-  assert_eq(env.NVIM_LISTEN_ADDRESS, "", "NVIM_LISTEN_ADDRESS blanked")
+  assert_true(env.NVIM == nil, "NVIM unset")
+  assert_true(env.NVIM_LISTEN_ADDRESS == nil, "NVIM_LISTEN_ADDRESS unset")
   assert_eq(env.OPENCODE_PERMISSION, "deny", "adapter env wins")
   local env2 = job._child_env({ NVIM = "custom" })
   assert_eq(env2.NVIM, "custom", "spec.env overrides blank NVIM")
+  local env3 = job._child_env({})
+  assert_true(env3.NVIM == nil, "_child_env({}) has no NVIM")
+  assert_true(env3.NVIM_LISTEN_ADDRESS == nil, "_child_env({}) has no NVIM_LISTEN_ADDRESS")
 end
 
 -- compose language/filetype coerced to string
@@ -1440,6 +1451,232 @@ do
     })
   end)
   assert_true(ok_coerced, "non-string language/filetype does not throw")
+end
+
+-- multiline notes/labels/errors must not throw
+do
+  local view = require("laler.view.float")
+  local diff = require("laler.diff.vim_diff")
+  local nop = function() end
+  local cb = {
+    on_apply = nop,
+    on_next = nop,
+    on_prev = nop,
+    on_jump = nop,
+    on_yank = nop,
+    on_retry = nop,
+    on_cancel = nop,
+    on_close = nop,
+  }
+  local ok_nl, err_nl = pcall(function()
+    view:show_review({
+      prompt_id = "correct",
+      adapter_name = "pi",
+      original = "a",
+      variants = { { label = "lab\nel", text = "b", notes = { "line1\nline2" } } },
+      index = 1,
+      diff_doc = diff:diff("a", "b"),
+    }, cb)
+  end)
+  assert_true(ok_nl, "show_review multiline notes/label " .. tostring(err_nl))
+  if ok_nl then
+    local buf = vim.api.nvim_get_current_buf()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local joined = table.concat(lines, "\n")
+    assert_true(joined:find("line1", 1, true) ~= nil, "note line1 present")
+    assert_true(joined:find("line2", 1, true) ~= nil, "note line2 present")
+    local has_nl = false
+    for _, l in ipairs(lines) do
+      if l:find("\n", 1, true) or l:find("\r", 1, true) then
+        has_nl = true
+      end
+    end
+    assert_true(not has_nl, "review buffer lines have no embedded newlines")
+    pcall(function()
+      view:close()
+    end)
+  end
+  local ok_err, err_show = pcall(function()
+    view:show_error("foo\nbar", nil, cb)
+  end)
+  assert_true(ok_err, "show_error with newline " .. tostring(err_show))
+  if ok_err then
+    pcall(function()
+      view:close()
+    end)
+  end
+end
+
+-- bare :Laler (range=0) is linewise; range=2 keeps char visual
+do
+  local laler = require("laler")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.cmd("normal! 0fbv2l")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  assert_eq(vim.fn.visualmode(), "v", "leftover visual is char")
+  local bare, berr = laler.range_from_command(1, 1, 0)
+  assert_true(bare ~= nil, "range=0 captures " .. tostring(berr))
+  assert_eq(bare.mode, "line", "range=0 is linewise whole line")
+  assert_eq(bare.text, "foo bar baz", "range=0 does not reuse substring")
+  local nilrange, nerr = laler.range_from_command(1, 1, nil)
+  assert_true(nilrange ~= nil, "nil range captures " .. tostring(nerr))
+  assert_eq(nilrange.mode, "line", "nil range is linewise")
+  local with2, werr = laler.range_from_command(1, 1, 2)
+  assert_true(with2 ~= nil, "range=2 captures " .. tostring(werr))
+  assert_eq(with2.mode, "char", "range=2 char-wise still works")
+  assert_eq(with2.text, "bar", "range=2 captures substring")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- vim_ui duplicate labels map to the correct id
+do
+  local ui = require("laler.picker.vim_ui")
+  local a = ui._item_line({ id = "one", label = "Same" })
+  local b = ui._item_line({ id = "two", label = "Same" })
+  assert_true(a ~= b, "duplicate labels produce unique keys")
+  assert_eq(ui._id_from_line(a), "one", "vim_ui id one")
+  assert_eq(ui._id_from_line(b), "two", "vim_ui id two")
+
+  local orig = vim.ui.select
+  local shown
+  local select_cb
+  vim.ui.select = function(items, _, cb)
+    shown = items
+    select_cb = cb
+  end
+  local chosen = {}
+  ui:pick({
+    { id = "one", label = "Same" },
+    { id = "two", label = "Same" },
+  }, {}, function(id)
+    chosen[#chosen + 1] = id
+  end)
+  assert_true(shown ~= nil and #shown == 2, "vim_ui select got two items")
+  select_cb(shown[2])
+  assert_eq(chosen[#chosen], "two", "duplicate label maps to second id")
+  select_cb(shown[1])
+  assert_eq(chosen[#chosen], "one", "duplicate label maps to first id")
+  vim.ui.select = orig
+end
+
+-- refuse capture on the review float
+do
+  local capture = require("laler.range")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.bo[buf].filetype = "laler"
+  vim.bo[buf].buftype = "nofile"
+  local r, err = capture:from_command_range(1, 1)
+  assert_true(r == nil, "from_command_range refuses laler buf")
+  assert_true(type(err) == "string" and err:find("cannot run on the review window", 1, true) ~= nil, "command refuse message")
+  r, err = capture:from_visual()
+  assert_true(r == nil, "from_visual refuses laler buf")
+  assert_true(type(err) == "string" and err:find("cannot run on the review window", 1, true) ~= nil, "visual refuse message")
+  r, err = capture:from_operator("char")
+  assert_true(r == nil, "from_operator refuses laler buf")
+  assert_true(type(err) == "string" and err:find("cannot run on the review window", 1, true) ~= nil, "operator refuse message")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- retry on emptied span stops the session (Apply must not run)
+do
+  local session = require("laler.session")
+  local capture = require("laler.range")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  local last_cb
+  local apply_n = 0
+  local view = {}
+  function view:open_loading() end
+  function view:show_review(_, cb)
+    last_cb = cb
+  end
+  function view:show_error() end
+  function view:close() end
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = view,
+    capture = capture,
+    apply = {
+      apply = function()
+        apply_n = apply_n + 1
+        return true
+      end,
+      normalize_apply_text = require("laler.apply").normalize_apply_text,
+    },
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for empty retry " .. tostring(err))
+  assert_eq(range.text, "bar", "captured bar")
+  session._start_job(range, "correct")
+  jobs.cbs[#jobs.cbs].on_exit(true, '{"variants":[{"text":"HELLO"}]}', "", 0)
+  assert_true(session._active() ~= nil, "session active after review")
+  assert_true(last_cb ~= nil, "review callbacks captured")
+  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, { "" })
+  local old_notify = vim.notify
+  vim.notify = function() end
+  last_cb.on_retry()
+  vim.notify = old_notify
+  assert_true(session._active() == nil, "empty retry stops session")
+  last_cb.on_apply()
+  assert_eq(apply_n, 0, "apply does not run after empty retry")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- unknown default_prompt
+do
+  local catalog = require("laler.prompt.catalog")
+  local config = require("laler.config")
+  local ok, err = pcall(function()
+    catalog.new({ default_prompt = "nope" })
+  end)
+  assert_true(not ok, "catalog unknown default_prompt errors")
+  assert_true(tostring(err):find("unknown default_prompt", 1, true) ~= nil, "catalog unknown default_prompt message")
+
+  ok, err = config.validate({ default_prompt = "nope" })
+  assert_true(not ok, "validate unknown default_prompt")
+  assert_true(tostring(err):find("unknown default_prompt", 1, true) ~= nil, "validate unknown default_prompt message")
+
+  ok, err = config.validate({ default_prompt = "correct" })
+  assert_true(ok, "validate known default_prompt")
+end
+
+-- apply.normalize_apply_text shared helper
+do
+  local apply = require("laler.apply")
+  assert_eq(apply.normalize_apply_text("qux\n"), "qux", "normalize strips one trailing nl")
+  assert_eq(apply.normalize_apply_text("qux\r\n"), "qux", "normalize strips crlf")
+  assert_eq(apply.normalize_apply_text("a\nb\n"), "a\nb", "normalize strips only one trailing")
 end
 
 print(string.format("laler tests: %d passed, %d failed", passed, failed))

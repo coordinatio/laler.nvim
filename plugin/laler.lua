@@ -9,7 +9,7 @@ if vim.fn.has("nvim-0.10") == 0 then
 end
 
 vim.api.nvim_create_user_command("Laler", function(opts)
-  require("laler").run_command(opts.line1, opts.line2, opts.args)
+  require("laler").run_command(opts.line1, opts.line2, opts.args, opts.range)
 end, {
   range = true,
   nargs = "?",
@@ -24,7 +24,7 @@ end, {
 })
 
 vim.api.nvim_create_user_command("LalerPick", function(opts)
-  require("laler").pick_command(opts.line1, opts.line2)
+  require("laler").pick_command(opts.line1, opts.line2, opts.range)
 end, {
   range = true,
   desc = "laler: pick prompt then correct range",

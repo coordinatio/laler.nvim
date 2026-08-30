@@ -152,9 +152,42 @@ local function open_win(buf)
   return win
 end
 
+---@param s string
+---@return string
+local function flatten_oneline(s)
+  return tostring(s):gsub("[\r\n]+", " ")
+end
+
+--- Split a note into a bullet plus continuation lines (no embedded newlines).
+---@param note string
+---@return string[]
+local function note_lines(note)
+  local text = tostring(note):gsub("\r\n", "\n"):gsub("\r", "\n")
+  local parts = vim.split(text, "\n", { plain = true })
+  local out = {}
+  for i, part in ipairs(parts) do
+    if i == 1 then
+      out[#out + 1] = "  • " .. part
+    else
+      out[#out + 1] = "    " .. part
+    end
+  end
+  if #out == 0 then
+    out[1] = "  • "
+  end
+  return out
+end
+
 ---@param buf integer
 ---@param lines string[]
 local function set_lines(buf, lines)
+  for i, l in ipairs(lines) do
+    if type(l) ~= "string" then
+      lines[i] = flatten_oneline(l)
+    elseif l:find("[\r\n]") then
+      lines[i] = flatten_oneline(l)
+    end
+  end
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -262,7 +295,7 @@ function M:show_review(review, callbacks)
     review.prompt_id,
     review.index,
     #review.variants,
-    v and v.label or "?",
+    flatten_oneline(v and v.label or "?"),
     review.adapter_name
   )
 
@@ -278,7 +311,9 @@ function M:show_review(review, callbacks)
   local notes_header = #out
   if v and v.notes and #v.notes > 0 then
     for _, n in ipairs(v.notes) do
-      out[#out + 1] = "  • " .. n
+      for _, line in ipairs(note_lines(n)) do
+        out[#out + 1] = line
+      end
     end
   else
     out[#out + 1] = "  (none)"
@@ -355,7 +390,7 @@ function M:show_error(err, raw, callbacks)
   local out = {
     "  Error",
     "",
-    "  " .. err,
+    "  " .. flatten_oneline(err),
     "",
   }
   if raw and raw ~= "" then

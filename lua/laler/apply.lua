@@ -3,9 +3,12 @@ local M = {}
 
 local NS = vim.api.nvim_create_namespace("laler_range")
 
+--- CRLF → `\n`, then strip at most one trailing newline. Shared with session
+--- so the review diff matches the text apply will write.
 ---@param text string
 ---@return string
-local function strip_trailing_newline(text)
+function M.normalize_apply_text(text)
+  text = tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
   if text:sub(-1) == "\n" then
     return text:sub(1, -2)
   end
@@ -70,8 +73,8 @@ function M:apply(range, text)
     return false, "buffer text changed; apply aborted"
   end
 
-  text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-  local lines = vim.split(strip_trailing_newline(text), "\n", { plain = true })
+  text = M.normalize_apply_text(text)
+  local lines = vim.split(text, "\n", { plain = true })
 
   local ok, err = pcall(function()
     if range.mode == "line" then

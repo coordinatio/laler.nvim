@@ -22,9 +22,15 @@ function M.new(opts)
     local cmd = opts.cmd
     local args = opts.args or {}
     if type(cmd) == "table" then
+      if #cmd == 0 then
+        error("laler: generic adapter cmd is empty")
+      end
       local list = vim.list_slice(cmd, 1, #cmd)
       cmd = table.remove(list, 1)
       args = vim.list_extend(list, args)
+    end
+    if type(cmd) ~= "string" or cmd == "" then
+      error("laler: generic adapter requires a non-empty cmd")
     end
 
     return {

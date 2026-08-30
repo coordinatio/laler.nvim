@@ -122,6 +122,11 @@ function M.new(opts)
   end
 
   local default_prompt = opts.default_prompt
+  if default_prompt ~= nil then
+    if type(default_prompt) ~= "string" or default_prompt == "" or not by_id[default_prompt] then
+      error("laler: unknown default_prompt '" .. tostring(default_prompt) .. "'")
+    end
+  end
   local remember = opts.remember_last_prompt ~= false
   local last_id = nil
 

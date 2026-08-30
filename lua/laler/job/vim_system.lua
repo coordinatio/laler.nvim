@@ -24,13 +24,22 @@ M._resolve_exit = resolve_exit
 ---@param spec_env table<string, string>|nil
 ---@return table<string, string>
 local function child_env(spec_env)
-  return vim.tbl_extend("force", {
-    NVIM = "",
-    NVIM_LISTEN_ADDRESS = "",
-  }, spec_env or {})
+  local env = {}
+  for k, v in pairs(vim.fn.environ()) do
+    env[k] = v
+  end
+  -- Unset — do not leave empty strings (some clients treat "" as set).
+  env.NVIM = nil
+  env.NVIM_LISTEN_ADDRESS = nil
+  if spec_env then
+    for k, v in pairs(spec_env) do
+      env[k] = v
+    end
+  end
+  return env
 end
 
---- Test helper: child env with blank NVIM* so agent CLIs do not attach to the parent.
+--- Test helper: child env with NVIM* removed so agent CLIs do not attach to the parent.
 M._child_env = child_env
 
 ---@param obj vim.SystemCompleted
@@ -84,9 +93,10 @@ function M:start(spec, callbacks, opts)
   local ok, obj_or_err = pcall(vim.system, cmd, {
     stdin = spec.stdin,
     cwd = spec.cwd or vim.fn.getcwd(),
-    -- Blank NVIM* so nested agent CLIs do not attach to this editor.
+    -- Full env without NVIM* so nested agent CLIs do not attach to this editor.
     -- spec.env is merged on top (OPENCODE_PERMISSION still wins).
     env = child_env(spec.env),
+    clear_env = true,
     text = true,
     timeout = opts.timeout_ms,
   }, function(obj)

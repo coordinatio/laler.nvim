@@ -92,6 +92,43 @@ function M.validate(cfg)
       return false, "prompts must be non-empty"
     end
   end
+  if cfg.default_prompt ~= nil then
+    if type(cfg.default_prompt) ~= "string" or cfg.default_prompt == "" then
+      return false, "unknown default_prompt"
+    end
+    local known = {}
+    if cfg.prompts ~= nil then
+      local is_list = false
+      if vim.islist then
+        is_list = vim.islist(cfg.prompts)
+      else
+        is_list = cfg.prompts[1] ~= nil
+      end
+      if is_list then
+        for _, p in ipairs(cfg.prompts) do
+          if type(p) == "table" and type(p.id) == "string" then
+            known[p.id] = true
+          end
+        end
+      else
+        for id, p in pairs(cfg.prompts) do
+          if type(p) == "table" then
+            local pid = p.id or id
+            if type(pid) == "string" then
+              known[pid] = true
+            end
+          end
+        end
+      end
+    else
+      for _, p in ipairs(require("laler.prompt.catalog").builtin()) do
+        known[p.id] = true
+      end
+    end
+    if not known[cfg.default_prompt] then
+      return false, "unknown default_prompt"
+    end
+  end
   return true
 end
 

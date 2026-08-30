@@ -3,6 +3,15 @@ local M = {}
 
 local NS = vim.api.nvim_create_namespace("laler_range")
 
+---@param bufnr integer
+---@return boolean
+local function is_review_window(bufnr)
+  if type(bufnr) ~= "number" or not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  return vim.bo[bufnr].filetype == "laler" and vim.bo[bufnr].buftype == "nofile"
+end
+
 ---@param ch string
 ---@return boolean extend
 ---@return boolean is_zwj
@@ -264,6 +273,9 @@ end
 function M:from_visual()
   local ok, range, err = pcall(function()
     local bufnr = vim.api.nvim_get_current_buf()
+    if is_review_window(bufnr) then
+      return nil, "cannot run on the review window"
+    end
     local mode = vim.fn.mode()
     local visual_mode
 
@@ -317,6 +329,9 @@ end
 function M:from_operator(mode)
   local ok, range, err = pcall(function()
     local bufnr = vim.api.nvim_get_current_buf()
+    if is_review_window(bufnr) then
+      return nil, "cannot run on the review window"
+    end
     if mode == "block" then
       return nil, "blockwise operator is not supported"
     end
@@ -353,6 +368,9 @@ end
 ---@return laler.Range?, string?
 function M:from_command_range(line1, line2)
   local bufnr = vim.api.nvim_get_current_buf()
+  if is_review_window(bufnr) then
+    return nil, "cannot run on the review window"
+  end
   local n = vim.api.nvim_buf_line_count(bufnr)
   if n < 1 then
     return nil, "invalid range"

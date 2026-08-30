@@ -71,7 +71,12 @@ require("laler").setup({
 })
 ```
 
-Prompt is always sent on **stdin**. Built-in adapters disable agent tools so they do not edit files:
+Prompt delivery:
+
+- **pi** and **opencode:** composed prompt on **stdin**
+- **cursor:** composed prompt as a **positional argv** argument (`agent -p` ignores stdin)
+
+Built-in adapters disable agent tools so they do not edit files:
 
 - **pi:** `-p --no-tools --no-session --no-context-files --no-extensions --no-skills`
 - **cursor:** `-p --mode ask --output-format text --trust` (workspace trust for headless; not `--force`)
