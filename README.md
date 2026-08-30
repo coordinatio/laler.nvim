@@ -79,8 +79,8 @@ Prompt delivery:
 Built-in adapters disable agent tools so they do not edit files:
 
 - **pi:** `-p --no-tools --no-session --no-context-files --no-extensions --no-skills`
-- **cursor:** `-p --mode ask --output-format text --trust` (workspace trust for headless; not `--force`)
-- **opencode:** `run --format default --pure --permissions` with an empty allowlist (omitted tools are denied), plus `OPENCODE_PERMISSION` deny-all
+- **cursor:** `-p --mode ask --output-format text --trust --sandbox enabled` (ask is read-only; workspace trust for headless; not `--force`)
+- **opencode:** `run --format default --pure`, plus `OPENCODE_PERMISSION` deny-all (no `--permissions` flag; that option is not on `run`)
 
 ## Built-in prompts
 

@@ -91,7 +91,7 @@ function M:start(spec, callbacks, opts)
   end
 
   local ok, obj_or_err = pcall(vim.system, cmd, {
-    stdin = spec.stdin,
+    stdin = spec.stdin or "",
     cwd = spec.cwd or vim.fn.getcwd(),
     -- Full env without NVIM* so nested agent CLIs do not attach to this editor.
     -- spec.env is merged on top (OPENCODE_PERMISSION still wins).

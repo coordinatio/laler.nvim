@@ -23,7 +23,7 @@ function M:request(composed)
   -- `agent -p` takes the prompt as a positional argument; stdin is ignored.
   return {
     cmd = resolve_bin(),
-    args = { "-p", "--mode", "ask", "--output-format", "text", "--trust", composed },
+    args = { "-p", "--mode", "ask", "--output-format", "text", "--trust", "--sandbox", "enabled", composed },
     stdin = "",
   }
 end

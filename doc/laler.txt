@@ -91,9 +91,10 @@ Built-ins (tools disabled so agents do not edit files):
   pi         `pi -p --no-tools --no-session --no-context-files --no-extensions
              --no-skills`
   cursor     `agent` or `cursor-agent` with `-p --mode ask --output-format text
-             --trust` (workspace trust; not `--force`)
-  opencode   `opencode run --format default --pure --permissions` with an empty
-             allowlist (omitted tools denied); OPENCODE_PERMISSION deny-all
+             --trust --sandbox enabled` (ask is read-only; workspace trust;
+             not `--force`)
+  opencode   `opencode run --format default --pure`; OPENCODE_PERMISSION
+             deny-all (no `--permissions` flag on `run`)
 
 Custom adapter table~
 >lua

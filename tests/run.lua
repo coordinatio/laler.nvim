@@ -487,6 +487,16 @@ do
   assert_true(vim.tbl_contains(spec.args, "--output-format"), "cursor --output-format")
   assert_true(vim.tbl_contains(spec.args, "text"), "cursor output-format text")
   assert_true(vim.tbl_contains(spec.args, "--trust"), "cursor --trust")
+  assert_true(vim.tbl_contains(spec.args, "--sandbox"), "cursor --sandbox")
+  local sandbox_i
+  for i, a in ipairs(spec.args) do
+    if a == "--sandbox" then
+      sandbox_i = i
+      break
+    end
+  end
+  assert_true(sandbox_i ~= nil, "cursor --sandbox index")
+  assert_eq(spec.args[sandbox_i + 1], "enabled", "cursor sandbox enabled")
   assert_true(not vim.tbl_contains(spec.args, "--force"), "cursor no --force")
   assert_true(not vim.tbl_contains(spec.args, "--yolo"), "cursor no --yolo")
 
@@ -497,16 +507,7 @@ do
   assert_eq(ospec.args[1], "run", "opencode run")
   assert_true(vim.tbl_contains(ospec.args, "--format"), "opencode --format")
   assert_true(vim.tbl_contains(ospec.args, "--pure"), "opencode --pure")
-  assert_true(vim.tbl_contains(ospec.args, "--permissions"), "opencode --permissions")
-  local perm_i
-  for i, a in ipairs(ospec.args) do
-    if a == "--permissions" then
-      perm_i = i
-      break
-    end
-  end
-  assert_true(perm_i ~= nil, "opencode --permissions index")
-  assert_eq(ospec.args[perm_i + 1], "", "opencode empty permissions allowlist")
+  assert_true(not vim.tbl_contains(ospec.args, "--permissions"), "opencode has no --permissions")
   assert_true(ospec.env and ospec.env.OPENCODE_PERMISSION ~= nil, "opencode permission env")
   assert_true(ospec.env.OPENCODE_PERMISSION:find("deny", 1, true) ~= nil, "opencode deny")
 end
@@ -818,10 +819,12 @@ do
   vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
   local range, err = capture:from_operator("char")
   assert_true(range ~= nil, "capture for refresh " .. tostring(err))
-  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, { "BAR" })
+  -- Edit inside the span. Replacing through the exclusive end collapses it
+  -- (end mark right_gravity = false: insert-at-end stays outside).
+  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.start_row, range.start_col + 1, { "B" })
   local ok = capture:refresh_from_marks(range)
   assert_true(ok, "refresh_from_marks")
-  assert_eq(range.text, "BAR", "retry re-reads current span")
+  assert_eq(range.text, "Bar", "retry re-reads current span")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
@@ -1225,6 +1228,7 @@ do
   local job_src = table.concat(vim.fn.readfile(root .. "/lua/laler/job/vim_system.lua"), "\n")
   assert_true(not job_src:find(":wait(0)", 1, true), "job cancel does not wait(0)")
   assert_true(job_src:find("is_closing", 1, true) ~= nil, "job cancel uses is_closing")
+  assert_true(job_src:find('spec.stdin or ""', 1, true) ~= nil, "job stdin defaults to empty")
   local plugin_src = table.concat(vim.fn.readfile(root .. "/plugin/laler.lua"), "\n")
   assert_true(plugin_src:find("nvim%-0%.10", 1) ~= nil, "plugin has nvim-0.10 guard")
 end
@@ -1304,14 +1308,14 @@ do
   range, err = capture:from_operator("char")
   assert_true(range ~= nil, "capture for picker confirm " .. tostring(err))
   assert_eq(range.text, "bar", "captured bar before edit")
-  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, { "BAR" })
+  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.start_row, range.start_col + 1, { "B" })
   composed_text = nil
   session.pick_and_run(range)
   pick_choice("correct")
   vim.wait(200, function()
     return composed_text ~= nil
   end)
-  assert_eq(composed_text, "BAR", "on_choice refreshes from marks")
+  assert_eq(composed_text, "Bar", "on_choice refreshes from marks")
 
   -- stale on_choice after a newer job
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "alpha", "beta" })
@@ -1944,6 +1948,52 @@ do
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+-- insert at exclusive end stays outside the span (end mark right_gravity = false)
+do
+  local capture = require("laler.range")
+  local apply = require("laler.apply")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two", "three" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  local range, err = capture:from_command_range(1, 2)
+  assert_true(range ~= nil, "line 1-2 for exclusive-end insert " .. tostring(err))
+  vim.api.nvim_buf_set_text(buf, 2, 0, 2, 0, { "XXX" })
+  local ok_r = capture:refresh_from_marks(range)
+  assert_true(ok_r, "refresh after insert at start of three")
+  assert_eq(range.text, "one\ntwo", "insert at exclusive end not in span")
+  local ok, aerr = apply:apply(range, "REPLACED")
+  assert_true(ok, "apply after exclusive-end insert " .. tostring(aerr))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  assert_eq(lines[1], "REPLACED", "replaced lines 1-2")
+  assert_true(lines[#lines]:find("three", 1, true) ~= nil, "three remains")
+  assert_eq(lines[#lines], "XXXthree", "XXX stays on three")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- char exclusive end: insert after last included char is not swallowed
+do
+  local capture = require("laler.range")
+  local apply = require("laler.apply")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "char capture for exclusive-end insert " .. tostring(err))
+  assert_eq(range.text, "bar", "captured bar")
+  vim.api.nvim_buf_set_text(buf, range.end_row, range.end_col, range.end_row, range.end_col, { "X" })
+  local ok_r = capture:refresh_from_marks(range)
+  assert_true(ok_r, "refresh after insert at exclusive char end")
+  assert_eq(range.text, "bar", "char insert at exclusive end not in span")
+  local ok, aerr = apply:apply(range, "qux")
+  assert_true(ok, "apply after exclusive char insert " .. tostring(aerr))
+  assert_eq(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "foo quxX baz", "inserted char not swallowed")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 -- yank uses normalize_apply_text
 do
   local session = require("laler.session")
@@ -2143,6 +2193,192 @@ do
     end
   end
   assert_true(total_ctx < 20, "does not emit all 20 lines as context")
+end
+
+-- _start_job cancels in-flight job before compose/request (even if they fail)
+do
+  local session = require("laler.session")
+  local cancel_n, start_n = 0, 0
+  local compose_ok, request_ok = true, true
+  local errors = {}
+  local jobs = {}
+  function jobs:start()
+    start_n = start_n + 1
+  end
+  function jobs:cancel()
+    cancel_n = cancel_n + 1
+  end
+  function jobs:is_running()
+    return false
+  end
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = {
+      compose = function(_, prompt, ctx)
+        if not compose_ok then
+          error("compose fail")
+        end
+        return require("laler.prompt.composer"):compose(prompt, ctx)
+      end,
+    },
+    llm = {
+      name = "fake",
+      request = function()
+        if not request_ok then
+          error("request fail")
+        end
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function(_, msg)
+        errors[#errors + 1] = msg
+      end,
+      close = function() end,
+    },
+    capture = {
+      delete_marks = function() end,
+    },
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  local range = {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }
+  session._start_job(range, "correct")
+  assert_eq(start_n, 1, "first job started")
+  local cancel_after_start = cancel_n
+  compose_ok = false
+  local nerr = #errors
+  session._start_job(range, "correct")
+  assert_true(cancel_n > cancel_after_start, "compose fail still cancels previous job")
+  assert_eq(start_n, 1, "compose fail does not start another job")
+  assert_true(#errors > nerr, "compose fail show_error")
+
+  compose_ok = true
+  request_ok = true
+  session._start_job(range, "correct")
+  assert_eq(start_n, 2, "job started after compose recovered")
+  cancel_after_start = cancel_n
+  request_ok = false
+  nerr = #errors
+  session._start_job(range, "correct")
+  assert_true(cancel_n > cancel_after_start, "request fail still cancels previous job")
+  assert_eq(start_n, 2, "request fail does not start another job")
+  assert_true(#errors > nerr, "request fail show_error")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- omitted stdin defaults to empty string (does not hang on fd 0)
+do
+  local job = require("laler.job.vim_system")
+  local done, ok_exit, code_exit = false, nil, nil
+  job:cancel()
+  job:start({ cmd = "cat", args = {} }, {
+    on_exit = function(ok, _, _, code)
+      done = true
+      ok_exit = ok
+      code_exit = code
+    end,
+  }, { timeout_ms = 5000 })
+  vim.wait(1500, function()
+    return done
+  end)
+  assert_true(done, "omitted stdin does not hang cat")
+  assert_true(ok_exit, "cat with empty stdin succeeds")
+  assert_eq(code_exit, 0, "cat exit 0")
+  job:cancel()
+end
+
+-- rebind keeps request_gen monotonic (stale callback cannot collide)
+do
+  local session = require("laler.session")
+  local function make_jobs()
+    local jobs = { cbs = {} }
+    function jobs:start(_, cb)
+      self.cbs[#self.cbs + 1] = cb
+    end
+    function jobs:cancel() end
+    function jobs:is_running()
+      return false
+    end
+    return jobs
+  end
+  local function make_ctx(jobs, reviews)
+    return {
+      config = { language = "en", n_variants = 1 },
+      catalog = require("laler.prompt.catalog").new({}),
+      composer = require("laler.prompt.composer"),
+      llm = {
+        name = "fake",
+        request = function()
+          return { cmd = "true", args = {}, stdin = "" }
+        end,
+      },
+      jobs = jobs,
+      parser = require("laler.parse.json"),
+      picker = { pick = function() end },
+      diff = require("laler.diff.vim_diff"),
+      view = {
+        open_loading = function() end,
+        show_review = function(_, state)
+          reviews[#reviews + 1] = state.variants[1].text
+        end,
+        show_error = function() end,
+        close = function() end,
+      },
+      capture = {
+        delete_marks = function() end,
+      },
+      apply = {
+        apply = function()
+          return true
+        end,
+      },
+    }
+  end
+  local jobs1, reviews1 = make_jobs(), {}
+  session.bind(make_ctx(jobs1, reviews1))
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  local range = {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }
+  session._start_job(range, "correct")
+  local jobs2, reviews2 = make_jobs(), {}
+  session.bind(make_ctx(jobs2, reviews2))
+  session._start_job(range, "correct")
+  jobs1.cbs[1].on_exit(true, '{"variants":[{"text":"STALE"}]}', "", 0)
+  assert_eq(#reviews1, 0, "stale callback after rebind ignored")
+  assert_eq(#reviews2, 0, "stale does not land on new view")
+  jobs2.cbs[1].on_exit(true, '{"variants":[{"text":"FRESH"}]}', "", 0)
+  assert_eq(#reviews2, 1, "fresh callback after rebind used")
+  assert_eq(reviews2[1], "FRESH", "fresh text after rebind")
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 print(string.format("laler tests: %d passed, %d failed", passed, failed))

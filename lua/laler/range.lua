@@ -208,8 +208,9 @@ local function make_range(bufnr, mode, start_row, start_col, end_row, end_col)
   local ok_s, start_mark = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS, start_row, start_col, {
     right_gravity = false,
   })
+  -- Exclusive end: insert-at-end must stay outside the span (not pulled in).
   local ok_e, end_mark = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS, mark_end_row, mark_end_col, {
-    right_gravity = true,
+    right_gravity = false,
   })
   if ok_s and ok_e then
     range.start_mark = start_mark

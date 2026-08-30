@@ -8,8 +8,8 @@ local M = {
 function M:request(composed)
   return {
     cmd = "opencode",
-    -- Empty --permissions allowlist: omitted tools are denied. --pure: no plugins.
-    args = { "run", "--format", "default", "--pure", "--permissions", "" },
+    -- `--permissions` is not a `run` flag (it prints help). Deny tools via env.
+    args = { "run", "--format", "default", "--pure" },
     stdin = composed,
     env = {
       OPENCODE_PERMISSION = vim.json.encode({

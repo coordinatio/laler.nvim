@@ -23,8 +23,8 @@ function M.bind(c)
     stop_session()
   end
   ctx = c
-  request_gen = 0
-  pick_gen = 0
+  -- Keep request_gen / pick_gen monotonic so a custom JobRunner that still
+  -- delivers an old callback cannot collide with a new job after rebind.
   active = nil
   pending_pick_range = nil
 end
@@ -250,6 +250,10 @@ function M._start_job(range, prompt_id)
     end
     return
   end
+
+  -- Cancel the previous CLI before compose/request so a failed start cannot
+  -- leave the old process running (`jobs:start` is never reached then).
+  c.jobs:cancel()
 
   if pending_pick_range and pending_pick_range ~= range then
     c.capture:delete_marks(pending_pick_range)
