@@ -60,6 +60,38 @@ local function extract_json_blob(s)
   return s:sub(start, finish)
 end
 
+---@param text string
+---@return string
+local function scrub_variant_text(text)
+  local markers = {
+    "\nOUTPUT FORMAT",
+    "\r\nOUTPUT FORMAT",
+    "\n---\nOUTPUT FORMAT",
+    "\nRules:\n- Do not change the meaning",
+    "\nHard rules:",
+    "\nReply with ONLY a JSON",
+    "<<<LALER_TEXT>>>",
+    "<<<END_LALER_TEXT>>>",
+    "\nJSON only:",
+  }
+  local cut = #text + 1
+  for _, m in ipairs(markers) do
+    local idx = text:find(m, 1, true)
+    if idx and idx < cut then
+      cut = idx
+    end
+  end
+  if cut <= #text then
+    text = text:sub(1, cut - 1)
+  end
+  -- If the model wrapped the passage in delimiters, keep the inner part.
+  local inner = text:match("<<<LALER_TEXT>>>%s*(.-)%s*<<<END_LALER_TEXT>>>")
+  if inner then
+    text = inner
+  end
+  return vim.trim(text)
+end
+
 ---@param data table
 ---@return laler.Variant[]?, string?
 local function normalize(data)
@@ -77,6 +109,10 @@ local function normalize(data)
     end
     if type(v.text) ~= "string" or v.text == "" then
       return nil, "variant " .. i .. ' missing "text"'
+    end
+    local text = scrub_variant_text(v.text)
+    if text == "" then
+      return nil, "variant " .. i .. ' "text" empty after scrubbing prompt leakage'
     end
     local notes = v.notes
     if notes == nil then
@@ -96,7 +132,7 @@ local function normalize(data)
     end
     out[#out + 1] = {
       label = type(v.label) == "string" and v.label ~= "" and v.label or ("variant-" .. i),
-      text = v.text,
+      text = text,
       notes = notes,
     }
   end

@@ -7,49 +7,44 @@ function M.builtin()
       id = "correct",
       label = "Correct",
       description = "Grammar + native-speaker fluency (3 variants)",
-      template = [[Analyze the following {{language}} text for formal correctness and how closely it matches what a native speaker would write.
+      template = [[Analyze the {{language}} passage inside <<<LALER_TEXT>>>…<<<END_LALER_TEXT>>> for formal correctness and how closely it matches what a native speaker would write.
 
 Provide {{n_variants}} corrected variants:
 1. conservative — minimal edits (label: "conservative")
 2. native — natural native-speaker phrasing (label: "native")
 3. alternative — a valid alternative phrasing (label: "alternative")
 
-Preserve meaning, markdown, and code fences.
-
-Text:
+Passage:
 {{text}}]],
     },
     {
       id = "formal",
       label = "Formal",
       description = "More formal register",
-      template = [[Rewrite the following {{language}} text in a more formal register.
+      template = [[Rewrite the {{language}} passage inside <<<LALER_TEXT>>>…<<<END_LALER_TEXT>>> in a more formal register.
 Provide {{n_variants}} variants with labels "formal-1", "formal-2", etc.
-Preserve meaning, markdown, and code fences.
 
-Text:
+Passage:
 {{text}}]],
     },
     {
       id = "casual",
       label = "Casual",
       description = "More casual / conversational",
-      template = [[Rewrite the following {{language}} text in a more casual, conversational register.
+      template = [[Rewrite the {{language}} passage inside <<<LALER_TEXT>>>…<<<END_LALER_TEXT>>> in a more casual, conversational register.
 Provide {{n_variants}} variants with labels "casual-1", "casual-2", etc.
-Preserve meaning, markdown, and code fences.
 
-Text:
+Passage:
 {{text}}]],
     },
     {
       id = "concise",
       label = "Concise",
       description = "Shorter and clearer",
-      template = [[Rewrite the following {{language}} text to be more concise and clear without losing meaning.
+      template = [[Rewrite the {{language}} passage inside <<<LALER_TEXT>>>…<<<END_LALER_TEXT>>> to be more concise and clear without losing meaning.
 Provide {{n_variants}} variants with labels "concise-1", "concise-2", etc.
-Preserve markdown and code fences.
 
-Text:
+Passage:
 {{text}}]],
     },
   }

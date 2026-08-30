@@ -65,8 +65,32 @@ do
   assert_true(out:find("Lang=en", 1, true) ~= nil, "language filled")
   assert_true(out:find("FT=markdown", 1, true) ~= nil, "filetype filled")
   assert_true(out:find("N=3", 1, true) ~= nil, "n_variants filled")
-  assert_true(out:find("hello", 1, true) ~= nil, "text filled")
-  assert_true(out:find('"variants"', 1, true) ~= nil, "JSON wrapper present")
+  assert_true(out:find("<<<LALER_TEXT>>>", 1, true) ~= nil, "delimiter open")
+  assert_true(out:find("<<<END_LALER_TEXT>>>", 1, true) ~= nil, "delimiter close")
+  assert_true(out:find("\nhello\n", 1, true) ~= nil, "text inside delimiters")
+  assert_true(out:find('"variants"', 1, true) ~= nil, "JSON schema present")
+  local schema_pos = out:find('"variants"', 1, true)
+  local text_pos = out:find("<<<LALER_TEXT>>>", 1, true)
+  assert_true(schema_pos < text_pos, "instructions before passage")
+end
+
+-- parse scrub leakage
+do
+  local parser = require("laler.parse.json")
+  local leaked = [[{
+  "variants": [{
+    "label": "native",
+    "text": "Please ingest the path and show how it impacts the wiki.\nOUTPUT FORMAT (required):\nReply with ONLY a JSON object",
+    "notes": ["article"]
+  }]
+}]]
+  local ok, variants = parser:parse(leaked)
+  assert_true(ok, "parses leaked text")
+  assert_eq(
+    variants[1].text,
+    "Please ingest the path and show how it impacts the wiki.",
+    "scrubs OUTPUT FORMAT leakage"
+  )
 end
 
 -- prompt/catalog
