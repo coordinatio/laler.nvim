@@ -49,6 +49,7 @@ local function make_callbacks()
         notify(err or "apply failed", vim.log.levels.ERROR)
         return
       end
+      c.capture:delete_marks(active.range)
       c.view:close()
       active = nil
     end,
@@ -92,17 +93,26 @@ local function make_callbacks()
       if not active then
         return
       end
+      if c.capture.refresh_from_marks and c.capture:refresh_from_marks(active.range) then
+        active.original = active.range.text
+      end
       M._start_job(active.range, active.prompt_id)
     end,
     on_cancel = function()
       local c2 = require_ctx()
       c2.jobs:cancel()
+      if active then
+        c2.capture:delete_marks(active.range)
+      end
       c2.view:close()
       active = nil
     end,
     on_close = function()
       local c2 = require_ctx()
       c2.jobs:cancel()
+      if active then
+        c2.capture:delete_marks(active.range)
+      end
       c2.view:close()
       active = nil
     end,
@@ -138,7 +148,6 @@ function M._start_job(range, prompt_id)
     return
   end
 
-  c.catalog:remember(prompt_id)
   request_gen = request_gen + 1
   local gen = request_gen
   active = {
@@ -169,7 +178,17 @@ function M._start_job(range, prompt_id)
         return
       end
       if not ok then
-        local msg = "command failed (exit " .. tostring(code) .. ")"
+        local msg
+        if code == 124 then
+          local ms = c.config and c.config.timeout_ms
+          if ms then
+            msg = "timed out after " .. tostring(ms) .. " ms"
+          else
+            msg = "timed out"
+          end
+        else
+          msg = "command failed (exit " .. tostring(code) .. ")"
+        end
         if stderr and stderr ~= "" then
           msg = msg .. ": " .. vim.trim(stderr):sub(1, 200)
         end
@@ -185,7 +204,7 @@ function M._start_job(range, prompt_id)
         return
       end
 
-      ---@cast result laler.Variant[]
+      c.catalog:remember(prompt_id)
       active.variants = result
       active.index = 1
       M._show_current()
@@ -244,13 +263,22 @@ function M.pick_and_run(range)
     prompt = "laler prompt",
     default_id = default_id,
   }, function(id)
-    M._start_job(range, id)
+    vim.schedule(function()
+      if id then
+        M._start_job(range, id)
+      end
+    end)
+  end, function()
+    -- picker cancelled: do not start a job
   end)
 end
 
 function M.cancel()
   local c = require_ctx()
   c.jobs:cancel()
+  if active then
+    c.capture:delete_marks(active.range)
+  end
   c.view:close()
   active = nil
 end

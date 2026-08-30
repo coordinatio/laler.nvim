@@ -41,7 +41,9 @@ function M:pick(items, opts, on_choice, on_cancel)
           local entry = action_state.get_selected_entry()
           actions.close(prompt_bufnr)
           if entry and entry.value then
-            on_choice(entry.value)
+            vim.schedule(function()
+              on_choice(entry.value)
+            end)
           elseif on_cancel then
             on_cancel()
           end

@@ -3,8 +3,62 @@ local M = {}
 
 local NS = vim.api.nvim_create_namespace("laler_range")
 
+---@param ch string
+---@return boolean extend
+---@return boolean is_zwj
+local function is_extend_char(ch)
+  local cp = vim.fn.char2nr(ch)
+  if cp == 0x200D then
+    return true, true
+  end
+  if cp == 0x200C then
+    return true, false
+  end
+  -- Variation selectors, skin-tone modifiers, combining keycap.
+  if (cp >= 0xFE00 and cp <= 0xFE0F) or (cp >= 0xE0100 and cp <= 0xE01EF) then
+    return true, false
+  end
+  if cp >= 0x1F3FB and cp <= 0x1F3FF then
+    return true, false
+  end
+  if cp == 0x20E3 then
+    return true, false
+  end
+  local ok1, skip = pcall(vim.fn.strchars, "a" .. ch, true)
+  local ok2, noskip = pcall(vim.fn.strchars, "a" .. ch, false)
+  if ok1 and ok2 and skip == 1 and noskip > 1 then
+    return true, false
+  end
+  return false, false
+end
+
+--- After the exclusive end of a codepoint, absorb combining/extend chars
+--- and ZWJ-joined emoji (👨‍👩‍👧).
+---@param line string
+---@param exclusive integer 0-indexed exclusive byte end
+---@return integer
+local function extend_composing(line, exclusive)
+  local i = exclusive + 1
+  while i <= #line do
+    local last = i + vim.str_utf_end(line, i)
+    local ch = line:sub(i, last)
+    local extend, is_zwj = is_extend_char(ch)
+    if not extend then
+      break
+    end
+    exclusive = last
+    i = last + 1
+    if is_zwj and i <= #line then
+      local nlast = i + vim.str_utf_end(line, i)
+      exclusive = nlast
+      i = nlast + 1
+    end
+  end
+  return exclusive
+end
+
 --- Inclusive 1-indexed byte of a character → 0-indexed exclusive end.
---- `vim.str_utf_end` returns the distance to the last byte of that character.
+--- Extends through combining marks and ZWJ grapheme clusters (Neovim 0.10+).
 ---@param line string
 ---@param col integer 1-indexed first byte of the last included character
 ---@return integer
@@ -16,7 +70,16 @@ function M.utf_exclusive_end(line, col)
   if col > len then
     return len
   end
-  return col + vim.str_utf_end(line, col)
+  local char_i = vim.fn.charidx(line, col - 1)
+  if type(char_i) == "number" and char_i >= 0 then
+    local next_start = vim.fn.byteidx(line, char_i + 1)
+    if type(next_start) == "number" and next_start >= 0 then
+      return extend_composing(line, next_start)
+    end
+    return extend_composing(line, len)
+  end
+  local exclusive = col + vim.str_utf_end(line, col)
+  return extend_composing(line, exclusive)
 end
 
 ---@param bufnr integer
@@ -50,7 +113,7 @@ local function start_col_from_pos(line, col1, excluded)
     if col1 > len then
       return len
     end
-    return col1 + vim.str_utf_end(line, col1)
+    return M.utf_exclusive_end(line, col1)
   end
   local col = col1 - 1
   if col < 0 then
@@ -121,9 +184,69 @@ local function make_range(bufnr, mode, start_row, start_col, end_row, end_col)
   if ok_s and ok_e then
     range.start_mark = start_mark
     range.end_mark = end_mark
+  else
+    if ok_s then
+      pcall(vim.api.nvim_buf_del_extmark, bufnr, NS, start_mark)
+    end
+    if ok_e then
+      pcall(vim.api.nvim_buf_del_extmark, bufnr, NS, end_mark)
+    end
   end
 
   return range
+end
+
+---@param range laler.Range?
+function M:delete_marks(range)
+  if not range then
+    return
+  end
+  if type(range.bufnr) == "number" and vim.api.nvim_buf_is_valid(range.bufnr) then
+    if range.start_mark then
+      pcall(vim.api.nvim_buf_del_extmark, range.bufnr, NS, range.start_mark)
+    end
+    if range.end_mark then
+      pcall(vim.api.nvim_buf_del_extmark, range.bufnr, NS, range.end_mark)
+    end
+  end
+  range.start_mark = nil
+  range.end_mark = nil
+end
+
+--- Re-read buffer text between extmarks into `range` (positions + text).
+---@param range laler.Range
+---@return boolean
+function M:refresh_from_marks(range)
+  if not range or range.start_mark == nil or range.end_mark == nil then
+    return false
+  end
+  if not vim.api.nvim_buf_is_valid(range.bufnr) then
+    return false
+  end
+  local s = vim.api.nvim_buf_get_extmark_by_id(range.bufnr, NS, range.start_mark, {})
+  local e = vim.api.nvim_buf_get_extmark_by_id(range.bufnr, NS, range.end_mark, {})
+  if not s or #s < 2 or not e or #e < 2 then
+    return false
+  end
+  if s[1] > e[1] or (s[1] == e[1] and range.mode ~= "line" and s[2] > e[2]) then
+    return false
+  end
+  range.start_row, range.start_col = s[1], s[2]
+  range.end_row, range.end_col = e[1], e[2]
+  local ok, text = pcall(function()
+    if range.mode == "line" then
+      return table.concat(vim.api.nvim_buf_get_lines(range.bufnr, range.start_row, range.end_row + 1, false), "\n")
+    end
+    return table.concat(
+      vim.api.nvim_buf_get_text(range.bufnr, range.start_row, range.start_col, range.end_row, range.end_col, {}),
+      "\n"
+    )
+  end)
+  if not ok then
+    return false
+  end
+  range.text = text
+  return true
 end
 
 --- Capture while still in visual mode (uses 'v' and '.').

@@ -88,9 +88,9 @@ ADAPTERS                                                        *laler-adapters*
 
 Built-ins (tools disabled so agents do not edit files):
 
-  pi         `pi -p --no-tools --no-session`  (prompt on stdin)
+  pi         `pi -p --no-tools --no-session --no-context-files --no-extensions`
   cursor     `agent` or `cursor-agent` with `-p --mode ask`
-  opencode   `opencode run` with write/edit denied via env
+  opencode   `opencode run` with all tools denied via OPENCODE_PERMISSION
 
 Custom adapter table~
 >lua
@@ -114,7 +114,11 @@ PROMPTS                                                          *laler-prompts*
 Built-in ids: `correct`, `formal`, `casual`, `concise`.
 
 Templates may use placeholders: `{{text}}`, `{{language}}`, `{{filetype}}`,
-`{{n_variants}}`. The composer appends a JSON-only output contract.
+`{{n_variants}}`, `{{text_open}}`, `{{text_close}}`, `{{variant_list}}`.
+`{{text}}` is the passage wrapped in unique delimiters; `{{text_open}}` /
+`{{text_close}}` are those delimiter strings; `{{variant_list}}` is a numbered
+list of requested variant labels. The composer prepends a JSON-only output
+contract.
 
 Expected model JSON~
 >json

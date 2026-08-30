@@ -8,6 +8,20 @@ M._config = nil
 
 local operator_mode = "run" ---@type "run"|"pick"
 
+local last_map = {
+  run = nil, ---@type string|nil
+  pick = nil, ---@type string|nil
+}
+
+---@param lhs string|nil
+local function unmap_lhs(lhs)
+  if type(lhs) ~= "string" or lhs == "" then
+    return
+  end
+  pcall(vim.keymap.del, "n", lhs)
+  pcall(vim.keymap.del, "x", lhs)
+end
+
 ---@param user_opts table|nil
 function M.setup(user_opts)
   local cfg = config.merge(user_opts)
@@ -43,13 +57,20 @@ function M.setup(user_opts)
   session.bind(ctx)
   M._config = cfg
 
-  if cfg.mappings and type(cfg.mappings) == "table" then
-    M._apply_mappings(cfg.mappings)
-  end
+  M._apply_mappings(cfg.mappings)
 end
 
----@param mappings { run?: string|false, pick?: string|false }
+---@param mappings { run?: string|false, pick?: string|false }|false|nil
 function M._apply_mappings(mappings)
+  unmap_lhs(last_map.run)
+  unmap_lhs(last_map.pick)
+  last_map.run = nil
+  last_map.pick = nil
+
+  if type(mappings) ~= "table" then
+    return
+  end
+
   if mappings.run then
     vim.keymap.set("n", mappings.run, function()
       return M.operator_run()
@@ -57,6 +78,7 @@ function M._apply_mappings(mappings)
     vim.keymap.set("x", mappings.run, function()
       M.run_visual()
     end, { desc = "laler: correct selection" })
+    last_map.run = mappings.run
   end
   if mappings.pick then
     vim.keymap.set("n", mappings.pick, function()
@@ -65,6 +87,7 @@ function M._apply_mappings(mappings)
     vim.keymap.set("x", mappings.pick, function()
       M.pick_visual()
     end, { desc = "laler: pick prompt for selection" })
+    last_map.pick = mappings.pick
   end
 end
 

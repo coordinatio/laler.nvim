@@ -55,7 +55,7 @@ function M:start(spec, callbacks, opts)
 
   local ok, obj_or_err = pcall(vim.system, cmd, {
     stdin = spec.stdin,
-    cwd = spec.cwd,
+    cwd = spec.cwd or vim.fn.getcwd(),
     env = merge_env(spec.env),
     text = true,
     timeout = opts.timeout_ms,
@@ -89,13 +89,32 @@ end
 
 function M:cancel()
   seq = seq + 1
-  if active then
-    local obj = active.obj
-    active = nil
-    pcall(function()
-      obj:kill(15)
-    end)
+  if not active then
+    return
   end
+  local dying = active
+  active = nil
+  pcall(function()
+    dying.obj:kill(15)
+  end)
+  vim.defer_fn(function()
+    -- Only SIGKILL this SystemObj; never a newer job (generation / identity).
+    if active and (active.obj == dying.obj or active.gen == dying.gen) then
+      return
+    end
+    local finished = false
+    pcall(function()
+      local result = dying.obj:wait(0)
+      if result ~= nil then
+        finished = true
+      end
+    end)
+    if not finished then
+      pcall(function()
+        dying.obj:kill(9)
+      end)
+    end
+  end, 1000)
 end
 
 ---@return boolean

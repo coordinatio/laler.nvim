@@ -80,7 +80,7 @@ do
   local leaked = [[{
   "variants": [{
     "label": "native",
-    "text": "Please ingest the path and show how it impacts the wiki.\nOUTPUT FORMAT (required):\nReply with ONLY a JSON object",
+    "text": "Please ingest the path and show how it impacts the wiki.\n<<<LALER_TEXT>>>\nsecret\n<<<END_LALER_TEXT>>>",
     "notes": ["article"]
   }]
 }]]
@@ -89,7 +89,29 @@ do
   assert_eq(
     variants[1].text,
     "Please ingest the path and show how it impacts the wiki.",
-    "scrubs OUTPUT FORMAT leakage"
+    "scrubs delimiter leakage"
+  )
+
+  local leaked_suf = [[{
+  "variants": [{
+    "text": "Kept prefix.\n<<<LALER_TEXT_1>>>\ninner\n<<<END_LALER_TEXT_1>>>"
+  }]
+}]]
+  ok, variants = parser:parse(leaked_suf)
+  assert_true(ok, "parses suffixed delimiter leakage")
+  assert_eq(variants[1].text, "Kept prefix.", "scrubs suffixed delimiter leakage")
+
+  local kept = [[{
+  "variants": [{
+    "text": "See the section below.\nHard rules: always be kind."
+  }]
+}]]
+  ok, variants = parser:parse(kept)
+  assert_true(ok, "parses hard-rules learner text")
+  assert_eq(
+    variants[1].text,
+    "See the section below.\nHard rules: always be kind.",
+    "keeps Hard rules in learner text"
   )
 end
 
@@ -146,7 +168,7 @@ do
     start_col = 0,
     end_row = 1,
     end_col = 0,
-    text = "a\nb",
+    text = "foo qux baz\nsecond",
   }
   ok = apply:apply(range2, "only")
   assert_true(ok, "line apply")
@@ -164,6 +186,8 @@ do
   local spec = pi:request("hello")
   assert_eq(spec.cmd, "pi", "pi cmd")
   assert_true(vim.tbl_contains(spec.args, "--no-tools"), "no-tools")
+  assert_true(vim.tbl_contains(spec.args, "--no-context-files"), "no-context-files")
+  assert_true(vim.tbl_contains(spec.args, "--no-extensions"), "no-extensions")
   assert_eq(spec.stdin, "hello", "stdin")
 
   local custom = llm.resolve({
@@ -417,6 +441,9 @@ do
   ok, err = config.validate({ timeout_ms = 0 })
   assert_true(not ok, "rejects timeout_ms 0")
   assert_true(type(err) == "string", "timeout_ms 0 err")
+  ok, err = config.validate({ n_variants = 10 })
+  assert_true(not ok, "rejects n_variants 10")
+  assert_true(type(err) == "string", "n_variants 10 err")
 end
 
 -- cursor / opencode: prompt on stdin, not argv
@@ -436,6 +463,8 @@ do
   assert_true(not table.concat(ospec.args, "\0"):find("SECRET_PROMPT", 1, true), "opencode args have no prompt")
   assert_eq(ospec.args[1], "run", "opencode run")
   assert_true(vim.tbl_contains(ospec.args, "--format"), "opencode --format")
+  assert_true(ospec.env and ospec.env.OPENCODE_PERMISSION ~= nil, "opencode permission env")
+  assert_true(ospec.env.OPENCODE_PERMISSION:find("deny", 1, true) ~= nil, "opencode deny")
 end
 
 -- job generation helper
@@ -593,6 +622,319 @@ do
     end
     assert_true(has_tab, "review maps <Tab>")
     assert_true(not has_bare_tab, "review does not map bare Tab")
+    pcall(function()
+      view:close()
+    end)
+  end
+end
+
+-- prefer last JSON object; skip example placeholder
+do
+  local parser = require("laler.parse.json")
+  local example = [[{"variants":[{"label":"short-name","text":"corrected passage only","notes":["brief learning note"]}]}]]
+  local ok, variants = parser:parse(example .. '\n{"variants":[{"text":"Hello there"}]}')
+  assert_true(ok, "example then real object parses")
+  assert_eq(variants[1].text, "Hello there", "prefers last valid object")
+
+  local fenced = "```json\n" .. example .. "\n```\n" .. '{"variants":[{"text":"Hello there"}]}'
+  ok, variants = parser:parse(fenced)
+  assert_true(ok, "fenced example then real parses")
+  assert_eq(variants[1].text, "Hello there", "prefers last after fenced example")
+
+  ok, variants = parser:parse('{"variants":[{"text":"good"},{"text":""}]}')
+  assert_true(ok, "skips empty variant")
+  assert_eq(#variants, 1, "one valid variant remains")
+  assert_eq(variants[1].text, "good", "kept non-empty variant")
+end
+
+-- combining marks / ZWJ exclusive end
+do
+  local capture = require("laler.range")
+  local acute = vim.fn.nr2char(0x301)
+  local comb = "e" .. acute
+  assert_eq(capture.utf_exclusive_end(comb, 1), #comb, "combining exclusive end")
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { comb })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 0, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 0, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "operator combining " .. tostring(err))
+  assert_eq(range.text, comb, "operator includes combining mark")
+
+  local family = vim.fn.nr2char(0x1F468)
+    .. vim.fn.nr2char(0x200D)
+    .. vim.fn.nr2char(0x1F469)
+    .. vim.fn.nr2char(0x200D)
+    .. vim.fn.nr2char(0x1F467)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { family })
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 0, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 0, {})
+  range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "operator zwj " .. tostring(err))
+  assert_eq(range.text, family, "operator includes ZWJ family emoji")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- from_visual (still in visual)
+do
+  local capture = require("laler.range")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcde" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.cmd("normal! 0v2l")
+  local range, err = capture:from_visual()
+  assert_true(range ~= nil, "from_visual ascii " .. tostring(err))
+  assert_eq(range.text, "abc", "visual ascii 0v2l")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "привет" })
+  vim.cmd("normal! 0v2l")
+  range, err = capture:from_visual()
+  assert_true(range ~= nil, "from_visual cyrillic " .. tostring(err))
+  assert_eq(range.text, "при", "visual cyrillic 0v2l")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+
+  vim.cmd("normal! V")
+  range, err = capture:from_visual()
+  assert_true(range ~= nil, "from_visual linewise " .. tostring(err))
+  assert_eq(range.mode, "line", "visual linewise mode")
+  assert_eq(range.text, "привет", "visual linewise text")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- apply CRLF
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  local apply = require("laler.apply")
+  local ok, err = apply:apply({
+    bufnr = buf,
+    mode = "char",
+    start_row = 0,
+    start_col = 4,
+    end_row = 0,
+    end_col = 7,
+    text = "bar",
+  }, "qux\r\nquux")
+  assert_true(ok, "crlf apply " .. tostring(err))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  assert_eq(lines[1], "foo qux", "crlf first line")
+  assert_eq(lines[2], "quux baz", "crlf second line")
+  assert_true(not lines[1]:find("\r", 1, true) and not lines[2]:find("\r", 1, true), "no CR left")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- abort apply if captured text diverged
+do
+  local capture = require("laler.range")
+  local apply = require("laler.apply")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for diverge " .. tostring(err))
+  assert_eq(range.text, "bar", "captured bar before edit")
+  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, { "BAR" })
+  local ok, aerr = apply:apply(range, "qux")
+  assert_true(not ok, "diverged apply fails")
+  assert_true(type(aerr) == "string", "diverged apply err")
+  assert_eq(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "foo BAR baz", "edited text preserved")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- retry re-reads from extmarks
+do
+  local capture = require("laler.range")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for refresh " .. tostring(err))
+  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, { "BAR" })
+  local ok = capture:refresh_from_marks(range)
+  assert_true(ok, "refresh_from_marks")
+  assert_eq(range.text, "BAR", "retry re-reads current span")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- catalog / config prompts validation
+do
+  local catalog = require("laler.prompt.catalog")
+  local config = require("laler.config")
+  local ok, err = pcall(function()
+    catalog.new({ prompts = {} })
+  end)
+  assert_true(not ok, "empty prompts catalog errors")
+  assert_true(tostring(err):find("laler:", 1, true) ~= nil, "empty prompts laler: prefix")
+
+  ok, err = pcall(function()
+    catalog.new({ prompts = { { template = "x" } } })
+  end)
+  assert_true(not ok, "missing id catalog errors")
+  assert_true(tostring(err):find("laler:", 1, true) ~= nil, "missing id laler: prefix")
+
+  ok, err = config.validate({ prompts = {} })
+  assert_true(not ok, "empty prompts config")
+  ok, err = config.validate({ prompts = { { template = "x" } } })
+  assert_true(not ok, "missing id config")
+
+  ok, err = pcall(function()
+    require("laler").setup({ prompts = {} })
+  end)
+  assert_true(not ok, "setup empty prompts errors")
+  assert_true(tostring(err):find("laler:", 1, true) ~= nil, "setup empty prompts prefix")
+end
+
+-- re-setup unmaps previous keys
+do
+  local laler = require("laler")
+  laler._apply_mappings({ run = "ll", pick = "lL" })
+  assert_true(vim.fn.maparg("ll", "n") ~= "", "ll mapped")
+  laler._apply_mappings({ run = "zz" })
+  assert_eq(vim.fn.maparg("ll", "n"), "", "old nmap gone after remap")
+  assert_true(vim.fn.maparg("zz", "n") ~= "", "zz mapped")
+  assert_eq(vim.fn.maparg("lL", "n"), "", "old pick unmapped")
+  laler._apply_mappings(false)
+  assert_eq(vim.fn.maparg("zz", "n"), "", "mappings=false unmaps")
+end
+
+-- CJK per-char tokens; Cyrillic still groups
+do
+  local diff = require("laler.diff.vim_diff")
+  local zh = diff._tokenize("汉字词")
+  assert_true(#zh > 1, "CJK splits into multiple tokens")
+  assert_true(#zh >= 3, "each CJK char is a token")
+  local cyr = diff._tokenize("привет")
+  assert_eq(#cyr, 1, "Cyrillic groups into a word")
+end
+
+-- fzf-lua keys by id
+do
+  local fzf = require("laler.picker.fzf_lua")
+  local a = fzf._item_line({ id = "one", label = "Same" })
+  local b = fzf._item_line({ id = "two", label = "Same" })
+  assert_true(a ~= b, "duplicate labels produce unique lines")
+  assert_eq(fzf._id_from_line(a), "one", "parse id one")
+  assert_eq(fzf._id_from_line(b), "two", "parse id two")
+end
+
+-- session: timeout message, remember after parse
+do
+  local session = require("laler.session")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+
+  local remembered = {}
+  local cat = require("laler.prompt.catalog").new({})
+  local orig_remember = cat.remember
+  function cat:remember(id)
+    remembered[#remembered + 1] = id
+    orig_remember(self, id)
+  end
+
+  local errors = {}
+  local view = {}
+  function view:open_loading() end
+  function view:show_review() end
+  function view:show_error(msg)
+    errors[#errors + 1] = msg
+  end
+  function view:close() end
+
+  session.bind({
+    config = { language = "en", n_variants = 1, timeout_ms = 5000 },
+    catalog = cat,
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = view,
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  local range = {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }
+  session._start_job(range, "correct")
+  assert_eq(#remembered, 0, "not remembered before parse")
+  jobs.cbs[#jobs.cbs].on_exit(true, "not json", "", 0)
+  assert_eq(#remembered, 0, "not remembered on parse fail")
+
+  session._start_job(range, "formal")
+  jobs.cbs[#jobs.cbs].on_exit(true, '{"variants":[{"text":"ok"}]}', "", 0)
+  assert_eq(remembered[#remembered], "formal", "remembered after successful parse")
+
+  session._start_job(range, "correct")
+  jobs.cbs[#jobs.cbs].on_exit(false, "", "", 124)
+  assert_true(#errors > 0, "timeout show_error")
+  local last_err = errors[#errors]
+  assert_true(last_err:find("timed out", 1, true) ~= nil, "timeout message says timed out")
+  assert_true(last_err:find("5000", 1, true) ~= nil, "timeout message includes timeout_ms")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- cap raw error dump
+do
+  local view = require("laler.view.float")
+  local nop = function() end
+  local cb = {
+    on_apply = nop,
+    on_next = nop,
+    on_prev = nop,
+    on_jump = nop,
+    on_yank = nop,
+    on_retry = nop,
+    on_cancel = nop,
+    on_close = nop,
+  }
+  local raw = string.rep("line\n", 250)
+  local ok_err = pcall(function()
+    view:show_error("boom", raw, cb)
+  end)
+  assert_true(ok_err, "show_error with huge raw")
+  if ok_err then
+    local buf = vim.api.nvim_get_current_buf()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local joined = table.concat(lines, "\n")
+    assert_true(joined:find("truncated", 1, true) ~= nil, "raw dump truncated marker")
+    assert_true(#lines < 260, "raw dump line cap")
     pcall(function()
       view:close()
     end)

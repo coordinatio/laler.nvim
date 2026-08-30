@@ -12,9 +12,7 @@ function M:request(composed)
     stdin = composed,
     env = {
       OPENCODE_PERMISSION = vim.json.encode({
-        edit = "deny",
-        write = "deny",
-        bash = "deny",
+        ["*"] = "deny",
       }),
     },
   }

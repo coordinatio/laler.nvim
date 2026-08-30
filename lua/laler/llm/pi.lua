@@ -8,7 +8,7 @@ local M = {
 function M:request(composed)
   return {
     cmd = "pi",
-    args = { "-p", "--no-tools", "--no-session" },
+    args = { "-p", "--no-tools", "--no-session", "--no-context-files", "--no-extensions", "--no-skills" },
     stdin = composed,
   }
 end

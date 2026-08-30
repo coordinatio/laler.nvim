@@ -12,9 +12,10 @@ Return ONLY a single JSON object (no markdown fences, no prose before or after i
   "variants": [
     {
       "label": "short-name",
-      "text": "corrected passage only",
+      "text": "<corrected passage>",
       "notes": ["brief learning note"]
-    }
+    },
+    ...
   ]
 }
 

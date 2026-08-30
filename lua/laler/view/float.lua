@@ -32,32 +32,39 @@ local state = {
   closing = false,
 }
 
+local HL_GROUP = vim.api.nvim_create_augroup("laler_colors", { clear = true })
+
 local function define_highlights()
   local dark = vim.o.background ~= "light"
-  local function hi(name, opts)
-    opts.default = true
-    vim.api.nvim_set_hl(0, name, opts)
-  end
+  vim.api.nvim_set_hl(0, "LalerDiffDeleteLine", { link = "DiffDelete" })
+  vim.api.nvim_set_hl(0, "LalerDiffAddLine", { link = "DiffAdd" })
   if dark then
-    hi("LalerDiffDeleteLine", { bg = "#3f0001" })
-    hi("LalerDiffAddLine", { bg = "#002800" })
-    hi("LalerDiffDeleteWord", { bg = "#901011" })
-    hi("LalerDiffAddWord", { bg = "#006000" })
-    hi("LalerHeader", { fg = "#24acd4", bold = true })
-    hi("LalerMeta", { fg = "#888888", italic = true })
-    hi("LalerNotes", { fg = "#c0c0a0" })
-    hi("LalerHint", { fg = "#666666" })
+    vim.api.nvim_set_hl(0, "LalerDiffDeleteWord", { bg = "#901011" })
+    vim.api.nvim_set_hl(0, "LalerDiffAddWord", { bg = "#006000" })
+    vim.api.nvim_set_hl(0, "LalerHeader", { fg = "#24acd4", bold = true })
+    vim.api.nvim_set_hl(0, "LalerMeta", { fg = "#888888", italic = true })
+    vim.api.nvim_set_hl(0, "LalerNotes", { fg = "#c0c0a0" })
+    vim.api.nvim_set_hl(0, "LalerHint", { fg = "#666666" })
   else
-    hi("LalerDiffDeleteLine", { bg = "#ffdee2" })
-    hi("LalerDiffAddLine", { bg = "#cfffd0" })
-    hi("LalerDiffDeleteWord", { bg = "#ffc1bf" })
-    hi("LalerDiffAddWord", { bg = "#9df0a2" })
-    hi("LalerHeader", { fg = "#0088aa", bold = true })
-    hi("LalerMeta", { fg = "#666666", italic = true })
-    hi("LalerNotes", { fg = "#555533" })
-    hi("LalerHint", { fg = "#888888" })
+    vim.api.nvim_set_hl(0, "LalerDiffDeleteWord", { bg = "#ffc1bf" })
+    vim.api.nvim_set_hl(0, "LalerDiffAddWord", { bg = "#9df0a2" })
+    vim.api.nvim_set_hl(0, "LalerHeader", { fg = "#0088aa", bold = true })
+    vim.api.nvim_set_hl(0, "LalerMeta", { fg = "#666666", italic = true })
+    vim.api.nvim_set_hl(0, "LalerNotes", { fg = "#555533" })
+    vim.api.nvim_set_hl(0, "LalerHint", { fg = "#888888" })
   end
 end
+
+define_highlights()
+vim.api.nvim_create_autocmd("ColorScheme", {
+  group = HL_GROUP,
+  callback = define_highlights,
+})
+vim.api.nvim_create_autocmd("OptionSet", {
+  group = HL_GROUP,
+  pattern = "background",
+  callback = define_highlights,
+})
 
 local function notify_closed()
   if state.closing then
@@ -299,6 +306,30 @@ function M:show_review(review, callbacks)
   map_keys(buf, callbacks, "review")
 end
 
+local MAX_RAW_LINES = 200
+local MAX_RAW_BYTES = 50 * 1024
+
+---@param raw string
+---@return string[] lines
+---@return boolean truncated
+local function cap_raw_lines(raw)
+  local truncated = false
+  if #raw > MAX_RAW_BYTES then
+    raw = raw:sub(1, MAX_RAW_BYTES)
+    truncated = true
+  end
+  local raw_lines = vim.split(raw, "\n", { plain = true })
+  if #raw_lines > MAX_RAW_LINES then
+    local kept = {}
+    for i = 1, MAX_RAW_LINES do
+      kept[i] = raw_lines[i]
+    end
+    raw_lines = kept
+    truncated = true
+  end
+  return raw_lines, truncated
+end
+
 ---@param err string
 ---@param raw? string
 ---@param callbacks laler.ReviewCallbacks
@@ -316,8 +347,12 @@ function M:show_error(err, raw, callbacks)
   }
   if raw and raw ~= "" then
     out[#out + 1] = "  --- raw output ---"
-    for _, line in ipairs(vim.split(raw, "\n", { plain = true })) do
+    local raw_lines, truncated = cap_raw_lines(raw)
+    for _, line in ipairs(raw_lines) do
       out[#out + 1] = "  " .. line
+    end
+    if truncated then
+      out[#out + 1] = "  ... [truncated]"
     end
     out[#out + 1] = ""
   end

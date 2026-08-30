@@ -82,7 +82,7 @@ Prompt is always sent on **stdin**. Built-in adapters disable agent tools so the
 | `casual` | More conversational |
 | `concise` | Shorter and clearer |
 
-Templates support `{{text}}`, `{{language}}`, `{{filetype}}`, `{{n_variants}}`. Output must be JSON with `variants[{label,text,notes}]`.
+Templates support `{{text}}`, `{{language}}`, `{{filetype}}`, `{{n_variants}}`, `{{text_open}}`, `{{text_close}}`, `{{variant_list}}`. `{{text}}` is the passage inside unique delimiters; `{{text_open}}` / `{{text_close}}` are those markers; `{{variant_list}}` lists requested variant labels. Output must be JSON with `variants[{label,text,notes}]`.
 
 ## Review keys
 

@@ -12,6 +12,26 @@ end
 
 ---@param ch string single UTF-8 character
 ---@return boolean
+local function is_combining(ch)
+  local ok1, skip = pcall(vim.fn.strchars, "a" .. ch, true)
+  local ok2, noskip = pcall(vim.fn.strchars, "a" .. ch, false)
+  return ok1 and ok2 and skip == 1 and noskip > 1
+end
+
+---@param ch string single UTF-8 character
+---@return boolean
+local function is_cjk_char(ch)
+  local b = string.byte(ch, 1)
+  if b and b < 128 then
+    return false
+  end
+  local cc = vim.fn.charclass(ch)
+  -- 0 blank, 1 punctuation, 2 keyword, 3 emoji; >3 = specific Unicode class (CJK)
+  return type(cc) == "number" and cc > 3
+end
+
+---@param ch string single UTF-8 character
+---@return boolean
 local function is_word_char(ch)
   if ch == "_" or ch == "'" then
     return true
@@ -20,22 +40,12 @@ local function is_word_char(ch)
   if b and b < 128 then
     return ch:match("^[%w]$") ~= nil
   end
-  -- Unicode letters / marks / digits. \p{L} is not available on all Nvim builds.
-  if vim.fn.match(ch, [[\p{L}]]) >= 0 then
-    return true
-  end
-  if vim.fn.match(ch, [[\p{M}]]) >= 0 then
-    return true
-  end
-  if vim.fn.match(ch, [[\p{Nd}]]) >= 0 then
-    return true
-  end
-  if vim.fn.match(ch, [[\k]]) >= 0 then
+  if is_combining(ch) then
     return true
   end
   local cc = vim.fn.charclass(ch)
-  -- 0 blank, 1 punctuation, 2 keyword, 3 emoji; other = specific Unicode class
-  return type(cc) == "number" and (cc == 2 or cc > 3)
+  -- Keyword class groups Latin/Cyrillic/etc. CJK is handled per-character.
+  return cc == 2
 end
 
 --- Tokenize into words and separators (punctuation / whitespace runs kept).
@@ -59,18 +69,32 @@ local function tokenize(line)
   local n = #positions
   while i <= n do
     local start_byte = positions[i]
-    local word = is_word_char(char_at(start_byte))
-    local j = i + 1
-    while j <= n do
-      if is_word_char(char_at(positions[j])) ~= word then
-        break
+    local ch = char_at(start_byte)
+    if is_cjk_char(ch) then
+      -- Each CJK character is its own word token (plus following combining marks).
+      local j = i + 1
+      while j <= n and is_combining(char_at(positions[j])) do
+        j = j + 1
       end
-      j = j + 1
+      local last_byte = positions[j - 1]
+      local end_byte = last_byte + vim.str_utf_end(line, last_byte)
+      tokens[#tokens + 1] = line:sub(start_byte, end_byte)
+      i = j
+    else
+      local word = is_word_char(ch)
+      local j = i + 1
+      while j <= n do
+        local nj = char_at(positions[j])
+        if is_cjk_char(nj) or is_word_char(nj) ~= word then
+          break
+        end
+        j = j + 1
+      end
+      local last_byte = positions[j - 1]
+      local end_byte = last_byte + vim.str_utf_end(line, last_byte)
+      tokens[#tokens + 1] = line:sub(start_byte, end_byte)
+      i = j
     end
-    local last_byte = positions[j - 1]
-    local end_byte = last_byte + vim.str_utf_end(line, last_byte)
-    tokens[#tokens + 1] = line:sub(start_byte, end_byte)
-    i = j
   end
   return tokens
 end

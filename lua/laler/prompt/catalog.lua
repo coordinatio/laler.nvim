@@ -71,19 +71,41 @@ function M.new(opts)
 
   if is_list then
     for _, p in ipairs(source) do
+      if type(p) ~= "table" then
+        error("laler: prompt must be a table")
+      end
+      if type(p.id) ~= "string" or p.id == "" then
+        error("laler: prompt missing string id")
+      end
+      if type(p.template) ~= "string" then
+        error("laler: prompt '" .. p.id .. "' must have a string template")
+      end
       list[#list + 1] = p
       by_id[p.id] = p
     end
   else
     for id, p in pairs(source) do
+      if type(p) ~= "table" then
+        error("laler: prompt '" .. tostring(id) .. "' must be a table")
+      end
       local def = vim.tbl_extend("force", {}, p)
       def.id = def.id or id
+      if type(def.id) ~= "string" or def.id == "" then
+        error("laler: prompt missing string id")
+      end
+      if type(def.template) ~= "string" then
+        error("laler: prompt '" .. def.id .. "' must have a string template")
+      end
       list[#list + 1] = def
       by_id[def.id] = def
     end
     table.sort(list, function(a, b)
       return a.id < b.id
     end)
+  end
+
+  if opts.prompts ~= nil and #list == 0 then
+    error("laler: prompts must be non-empty")
   end
 
   local default_prompt = opts.default_prompt
