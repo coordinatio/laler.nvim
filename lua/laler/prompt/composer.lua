@@ -51,6 +51,8 @@ local function variant_list(n)
   return table.concat(lines, "\n")
 end
 
+local MARKER_SUFFIX_CAP = 256
+
 ---@param text string
 ---@return string, string
 local function unique_markers(text)
@@ -58,7 +60,7 @@ local function unique_markers(text)
     return DEFAULT_OPEN, DEFAULT_CLOSE
   end
   local n = 1
-  while true do
+  while n <= MARKER_SUFFIX_CAP do
     local open = "<<<LALER_TEXT_" .. n .. ">>>"
     local close = "<<<END_LALER_TEXT_" .. n .. ">>>"
     if not text:find(open, 1, true) and not text:find(close, 1, true) then
@@ -66,6 +68,8 @@ local function unique_markers(text)
     end
     n = n + 1
   end
+  local token = tostring(os.time()) .. "x" .. tostring(math.random(1000, 9999))
+  return "<<<LALER_TEXT_" .. token .. ">>>", "<<<END_LALER_TEXT_" .. token .. ">>>"
 end
 
 ---@param template string
@@ -89,8 +93,8 @@ function M:compose(prompt, ctx)
   }, "\n")
   local map = {
     text = delimited,
-    language = ctx.language,
-    filetype = ctx.filetype,
+    language = tostring(ctx.language or "en"),
+    filetype = tostring(ctx.filetype or ""),
     n_variants = tostring(ctx.n_variants),
     text_open = open,
     text_close = close,

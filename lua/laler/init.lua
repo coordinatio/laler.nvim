@@ -152,13 +152,17 @@ end
 --- Visual `:'<,'>Laler` inserts a line range; if last visual was char-wise
 --- (`v`) and line1/line2 match `'<`/`'>`, capture columns via `from_visual()`.
 --- Linewise `V` (or a range that does not match the marks) stays linewise.
+--- Blockwise `\22` is not supported as char capture; fall back to linewise.
 ---@param line1 integer
 ---@param line2 integer
 ---@return laler.Range?, string?
 function M.range_from_command(line1, line2)
   local capture = require("laler.range")
   local vm = vim.fn.visualmode()
-  if vm == "v" or vm == "\22" then
+  if vm == "\22" then
+    return capture:from_command_range(line1, line2)
+  end
+  if vm == "v" then
     local a = vim.fn.getpos("'<")
     local b = vim.fn.getpos("'>")
     if a[2] > 0 and b[2] > 0 then

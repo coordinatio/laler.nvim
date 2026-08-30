@@ -89,7 +89,11 @@ local function line_at(bufnr, row)
   if row < 0 then
     return ""
   end
-  return vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+  local ok, lines = pcall(vim.api.nvim_buf_get_lines, bufnr, row, row + 1, false)
+  if not ok or type(lines) ~= "table" then
+    return ""
+  end
+  return lines[1] or ""
 end
 
 ---@param pos1 table getpos()
@@ -154,15 +158,21 @@ end
 ---@param start_col integer
 ---@param end_row integer
 ---@param end_col integer
----@return laler.Range
+---@return laler.Range?, string?
 local function make_range(bufnr, mode, start_row, start_col, end_row, end_col)
-  local text
-  if mode == "line" then
-    local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row + 1, false)
-    text = table.concat(lines, "\n")
-  else
+  start_row = math.max(0, start_row)
+  end_row = math.max(0, end_row)
+
+  local ok, text = pcall(function()
+    if mode == "line" then
+      local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row + 1, false)
+      return table.concat(lines, "\n")
+    end
     local lines = vim.api.nvim_buf_get_text(bufnr, start_row, start_col, end_row, end_col, {})
-    text = table.concat(lines, "\n")
+    return table.concat(lines, "\n")
+  end)
+  if not ok then
+    return nil, "invalid range"
   end
 
   local range = {
@@ -252,77 +262,90 @@ end
 --- Capture while still in visual mode (uses 'v' and '.').
 ---@return laler.Range?, string?
 function M:from_visual()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local mode = vim.fn.mode()
-  local visual_mode
+  local ok, range, err = pcall(function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local mode = vim.fn.mode()
+    local visual_mode
 
-  local start_pos, end_pos
-  local in_visual = mode:find("[vV\22]") ~= nil
-  if in_visual then
-    visual_mode = mode
-    start_pos = vim.fn.getpos("v")
-    end_pos = vim.fn.getpos(".")
-  else
-    visual_mode = vim.fn.visualmode()
-    start_pos = vim.fn.getpos("'<")
-    end_pos = vim.fn.getpos("'>")
+    local start_pos, end_pos
+    local in_visual = mode:find("[vV\22]") ~= nil
+    if in_visual then
+      visual_mode = mode
+      start_pos = vim.fn.getpos("v")
+      end_pos = vim.fn.getpos(".")
+    else
+      visual_mode = vim.fn.visualmode()
+      start_pos = vim.fn.getpos("'<")
+      end_pos = vim.fn.getpos("'>")
+    end
+
+    if visual_mode == "\22" then
+      return nil, "blockwise visual is not supported"
+    end
+
+    local exclusive = in_visual and vim.o.selection == "exclusive"
+    -- Anchor is inclusive; the cursor ('.') is excluded when selection=exclusive
+    -- and we are still in visual mode. After Esc, `'<`/`'>` are inclusive.
+    local start_excl, end_excl = false, exclusive
+    if pos_after(start_pos, end_pos) then
+      start_pos, end_pos = end_pos, start_pos
+      start_excl, end_excl = end_excl, start_excl
+    end
+
+    local start_row = math.max(0, start_pos[2] - 1)
+    local end_row = math.max(0, end_pos[2] - 1)
+
+    if visual_mode == "V" then
+      return make_range(bufnr, "line", start_row, 0, end_row, 0)
+    end
+
+    local start_line = line_at(bufnr, start_row)
+    local end_line = line_at(bufnr, end_row)
+    local start_col = start_col_from_pos(start_line, start_pos[3], start_excl)
+    local end_col = end_col_from_pos(end_line, end_pos[3], end_excl)
+
+    return make_range(bufnr, "char", start_row, start_col, end_row, end_col)
+  end)
+  if not ok then
+    return nil, tostring(range)
   end
-
-  if visual_mode == "\22" then
-    return nil, "blockwise visual is not supported"
-  end
-
-  local exclusive = vim.o.selection == "exclusive"
-  -- Anchor is inclusive; the cursor ('.') is excluded when selection=exclusive.
-  local start_excl, end_excl = false, exclusive
-  if pos_after(start_pos, end_pos) then
-    start_pos, end_pos = end_pos, start_pos
-    start_excl, end_excl = end_excl, start_excl
-  end
-
-  local start_row = start_pos[2] - 1
-  local end_row = end_pos[2] - 1
-
-  if visual_mode == "V" then
-    return make_range(bufnr, "line", start_row, 0, end_row, 0)
-  end
-
-  local start_line = line_at(bufnr, start_row)
-  local end_line = line_at(bufnr, end_row)
-  local start_col = start_col_from_pos(start_line, start_pos[3], start_excl)
-  local end_col = end_col_from_pos(end_line, end_pos[3], end_excl)
-
-  return make_range(bufnr, "char", start_row, start_col, end_row, end_col)
+  return range, err
 end
 
 ---@param mode string "char"|"line"|"block" from operatorfunc
 ---@return laler.Range?, string?
 function M:from_operator(mode)
-  local bufnr = vim.api.nvim_get_current_buf()
-  if mode == "block" then
-    return nil, "blockwise operator is not supported"
+  local ok, range, err = pcall(function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    if mode == "block" then
+      return nil, "blockwise operator is not supported"
+    end
+
+    local start_pos = vim.fn.getpos("'[")
+    local end_pos = vim.fn.getpos("']")
+    if pos_after(start_pos, end_pos) then
+      start_pos, end_pos = end_pos, start_pos
+    end
+
+    local start_row = math.max(0, start_pos[2] - 1)
+    local end_row = math.max(0, end_pos[2] - 1)
+
+    if mode == "line" then
+      return make_range(bufnr, "line", start_row, 0, end_row, 0)
+    end
+
+    -- Operator marks are inclusive of the last character regardless of 'selection'.
+    local start_line = line_at(bufnr, start_row)
+    local end_line = line_at(bufnr, end_row)
+    local start_col = start_col_from_pos(start_line, start_pos[3], false)
+    local end_col = end_col_from_pos(end_line, end_pos[3], false)
+
+    return make_range(bufnr, "char", start_row, start_col, end_row, end_col)
+  end)
+  if not ok then
+    return nil, tostring(range)
   end
-
-  local start_pos = vim.fn.getpos("'[")
-  local end_pos = vim.fn.getpos("']")
-  if pos_after(start_pos, end_pos) then
-    start_pos, end_pos = end_pos, start_pos
-  end
-
-  local start_row = start_pos[2] - 1
-  local end_row = end_pos[2] - 1
-
-  if mode == "line" then
-    return make_range(bufnr, "line", start_row, 0, end_row, 0)
-  end
-
-  -- Operator marks are inclusive of the last character regardless of 'selection'.
-  local start_line = line_at(bufnr, start_row)
-  local end_line = line_at(bufnr, end_row)
-  local start_col = start_col_from_pos(start_line, start_pos[3], false)
-  local end_col = end_col_from_pos(end_line, end_pos[3], false)
-
-  return make_range(bufnr, "char", start_row, start_col, end_row, end_col)
+  return range, err
 end
 
 ---@param line1 integer 1-indexed

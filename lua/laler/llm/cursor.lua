@@ -17,10 +17,11 @@ end
 ---@param composed string
 ---@return laler.JobSpec
 function M:request(composed)
+  -- `agent -p` takes the prompt as a positional argument; stdin is ignored.
   return {
     cmd = resolve_bin(),
-    args = { "-p", "--mode", "ask", "--output-format", "text", "--trust" },
-    stdin = composed,
+    args = { "-p", "--mode", "ask", "--output-format", "text", "--trust", composed },
+    stdin = "",
   }
 end
 

@@ -74,9 +74,36 @@ do
   assert_true(schema_pos < text_pos, "instructions before passage")
 end
 
--- parse scrub leakage
+-- parse: unwrap full delimiter wrap; do not crop mid-text tokens
 do
   local parser = require("laler.parse.json")
+  local kept_token = [[{
+  "variants": [{
+    "text": "keep <<<END_LALER_TEXT>>> this"
+  }]
+}]]
+  local ok, variants = parser:parse(kept_token)
+  assert_true(ok, "parses delimiter substring")
+  assert_eq(variants[1].text, "keep <<<END_LALER_TEXT>>> this", "preserves delimiter text")
+
+  local wrapped = [[{
+  "variants": [{
+    "text": "<<<LALER_TEXT>>>\nsecret\n<<<END_LALER_TEXT>>>"
+  }]
+}]]
+  ok, variants = parser:parse(wrapped)
+  assert_true(ok, "parses wrapped default markers")
+  assert_eq(variants[1].text, "secret", "unwraps default wrap")
+
+  local wrapped_suf = [[{
+  "variants": [{
+    "text": "<<<LALER_TEXT_1>>>\ninner\n<<<END_LALER_TEXT_1>>>"
+  }]
+}]]
+  ok, variants = parser:parse(wrapped_suf)
+  assert_true(ok, "parses wrapped unique markers")
+  assert_eq(variants[1].text, "inner", "unwraps unique wrap")
+
   local leaked = [[{
   "variants": [{
     "label": "native",
@@ -84,22 +111,13 @@ do
     "notes": ["article"]
   }]
 }]]
-  local ok, variants = parser:parse(leaked)
+  ok, variants = parser:parse(leaked)
   assert_true(ok, "parses leaked text")
   assert_eq(
     variants[1].text,
-    "Please ingest the path and show how it impacts the wiki.",
-    "scrubs delimiter leakage"
+    "Please ingest the path and show how it impacts the wiki.\n<<<LALER_TEXT>>>\nsecret\n<<<END_LALER_TEXT>>>",
+    "does not crop mid-text delimiters"
   )
-
-  local leaked_suf = [[{
-  "variants": [{
-    "text": "Kept prefix.\n<<<LALER_TEXT_1>>>\ninner\n<<<END_LALER_TEXT_1>>>"
-  }]
-}]]
-  ok, variants = parser:parse(leaked_suf)
-  assert_true(ok, "parses suffixed delimiter leakage")
-  assert_eq(variants[1].text, "Kept prefix.", "scrubs suffixed delimiter leakage")
 
   local kept = [[{
   "variants": [{
@@ -396,6 +414,11 @@ do
   local ok, variants = parser:parse('Sure, {code} looks off. {"variants":[{"text":"ok"}]}')
   assert_true(ok, "parses after prose brace")
   assert_eq(variants[1].text, "ok", "prose then object text")
+
+  local dummy = string.rep("{x}", 50)
+  ok, variants = parser:parse(dummy .. '{"variants":[{"text":"real"}]}')
+  assert_true(ok, "parses after many dummy braces")
+  assert_eq(variants[1].text, "real", "finds variants after many braces")
 end
 
 -- composer delimiter collision
@@ -447,15 +470,18 @@ do
   assert_true(type(err) == "string", "n_variants 10 err")
 end
 
--- cursor / opencode: prompt on stdin, not argv
+-- cursor: prompt as last argv, empty stdin; opencode/pi stay stdin-only
 do
   local cursor = require("laler.llm.cursor")
   local spec = cursor:request("SECRET_PROMPT")
-  assert_eq(spec.stdin, "SECRET_PROMPT", "cursor stdin")
-  local args_joined = table.concat(spec.args, "\0")
-  assert_true(not args_joined:find("SECRET_PROMPT", 1, true), "cursor args have no prompt")
+  assert_eq(spec.stdin, "", "cursor stdin empty")
+  assert_eq(spec.args[#spec.args], "SECRET_PROMPT", "cursor prompt last argv")
+  assert_true(vim.tbl_contains(spec.args, "SECRET_PROMPT"), "cursor args have prompt")
   assert_true(vim.tbl_contains(spec.args, "-p"), "cursor -p")
   assert_true(vim.tbl_contains(spec.args, "--mode"), "cursor --mode")
+  assert_true(vim.tbl_contains(spec.args, "ask"), "cursor --mode ask")
+  assert_true(vim.tbl_contains(spec.args, "--output-format"), "cursor --output-format")
+  assert_true(vim.tbl_contains(spec.args, "text"), "cursor output-format text")
   assert_true(vim.tbl_contains(spec.args, "--trust"), "cursor --trust")
   assert_true(not vim.tbl_contains(spec.args, "--force"), "cursor no --force")
   assert_true(not vim.tbl_contains(spec.args, "--yolo"), "cursor no --yolo")
@@ -921,6 +947,11 @@ do
   local last_err = errors[#errors]
   assert_true(last_err:find("timed out", 1, true) ~= nil, "timeout message says timed out")
   assert_true(last_err:find("5000", 1, true) ~= nil, "timeout message includes timeout_ms")
+
+  session._start_job(range, "correct")
+  jobs.cbs[#jobs.cbs].on_exit(false, "", "", 0, 9)
+  last_err = errors[#errors]
+  assert_true(last_err:find("timed out", 1, true) ~= nil, "SIGKILL is treated as timeout")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
@@ -969,6 +1000,10 @@ do
   ok, variants = parser:parse('{"variants":[{"text":"\\n    Hello world\\n"}]}')
   assert_true(ok, "parses newline-wrapped indented variant")
   assert_eq(variants[1].text, "    Hello world", "strips wrapping newlines only")
+
+  ok, variants = parser:parse('{"variants":[{"text":"\\n\\nkeep blank\\n\\n"}]}')
+  assert_true(ok, "parses double wrapping newlines")
+  assert_eq(variants[1].text, "\nkeep blank\n", "strips at most one wrapping newline")
 end
 
 -- completion prefix filter
@@ -1133,6 +1168,14 @@ do
   assert_true(vline ~= nil, "linewise visual command " .. tostring(verr))
   assert_eq(vline.mode, "line", "V stays linewise")
   assert_eq(vline.text, "foo bar baz", "V captures whole line")
+
+  vim.cmd("normal! 0" .. vim.api.nvim_replace_termcodes("<C-v>2l", true, false, true))
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  assert_eq(vim.fn.visualmode(), "\22", "last visual is block")
+  local block, berr = laler.range_from_command(1, 1)
+  assert_true(block ~= nil, "block visual command range " .. tostring(berr))
+  assert_eq(block.mode, "line", "blockwise command is linewise")
+  assert_eq(block.text, "foo bar baz", "blockwise command uses line range")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
@@ -1270,6 +1313,133 @@ do
   assert_true(b.start_mark ~= nil, "current range keeps marks")
 
   vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- :LalerCancel invalidates a pending picker on_choice
+do
+  local session = require("laler.session")
+  local capture = require("laler.range")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  local pick_choice
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = {
+      pick = function(_, _, _, on_choice)
+        pick_choice = on_choice
+      end,
+    },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = capture,
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for cancel pick " .. tostring(err))
+  local mark = range.start_mark
+  session.pick_and_run(range)
+  assert_true(pick_choice ~= nil, "picker on_choice captured")
+  local cbs_before = #jobs.cbs
+  session.cancel()
+  if mark then
+    local leftover = vim.api.nvim_buf_get_extmark_by_id(buf, vim.api.nvim_create_namespace("laler_range"), mark, {})
+    assert_true(not leftover or #leftover == 0, "cancel deletes pending pick marks")
+  end
+  pick_choice("correct")
+  vim.wait(50)
+  assert_eq(#jobs.cbs, cbs_before, "cancel invalidates picker on_choice")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- selection=exclusive after Esc still includes last character
+do
+  local capture = require("laler.range")
+  local laler = require("laler")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcde" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  local old_sel = vim.o.selection
+  vim.o.selection = "exclusive"
+  vim.cmd("normal! 0v2l")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  local a = vim.fn.getpos("'<")
+  local b = vim.fn.getpos("'>")
+  local line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+  local expected = line:sub(a[3], capture.utf_exclusive_end(line, b[3]))
+  local range, err = capture:from_visual()
+  assert_true(range ~= nil, "exclusive after Esc from_visual " .. tostring(err))
+  assert_eq(range.text, expected, "exclusive after Esc includes last mark char")
+  assert_true(#range.text >= 1, "exclusive after Esc has text")
+  local last_ch = expected:sub(-1)
+  assert_eq(range.text:sub(-1), last_ch, "last character kept after Esc")
+
+  local cmd_range, cerr = laler.range_from_command(1, 1)
+  assert_true(cmd_range ~= nil, "exclusive after Esc command " .. tostring(cerr))
+  assert_eq(cmd_range.text, expected, "exclusive command range includes last char")
+  vim.o.selection = old_sel
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- child env blanks NVIM*; adapter env still wins
+do
+  local job = require("laler.job.vim_system")
+  local env = job._child_env({ OPENCODE_PERMISSION = "deny" })
+  assert_eq(env.NVIM, "", "NVIM blanked")
+  assert_eq(env.NVIM_LISTEN_ADDRESS, "", "NVIM_LISTEN_ADDRESS blanked")
+  assert_eq(env.OPENCODE_PERMISSION, "deny", "adapter env wins")
+  local env2 = job._child_env({ NVIM = "custom" })
+  assert_eq(env2.NVIM, "custom", "spec.env overrides blank NVIM")
+end
+
+-- compose language/filetype coerced to string
+do
+  local composer = require("laler.prompt.composer")
+  local ok_coerced = pcall(function()
+    composer:compose({
+      id = "t",
+      label = "T",
+      template = "Lang={{language}} FT={{filetype}}\n{{text}}",
+    }, {
+      text = "hello",
+      language = {},
+      filetype = {},
+      n_variants = 3,
+    })
+  end)
+  assert_true(ok_coerced, "non-string language/filetype does not throw")
 end
 
 print(string.format("laler tests: %d passed, %d failed", passed, failed))

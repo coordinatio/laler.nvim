@@ -39,6 +39,76 @@ local function yank_text(text)
   pcall(vim.fn.setreg, "*", text)
 end
 
+---@param text string
+---@return boolean
+local function too_large(text)
+  if type(text) ~= "string" then
+    return true
+  end
+  if #text > M.MAX_RANGE_BYTES then
+    return true
+  end
+  local nlines = 1
+  for _ in text:gmatch("\n") do
+    nlines = nlines + 1
+    if nlines > M.MAX_RANGE_LINES then
+      return true
+    end
+  end
+  return false
+end
+
+--- Test helper: whether captured text exceeds the send cap.
+---@param text string
+---@return boolean
+function M._too_large(text)
+  return too_large(text)
+end
+
+---@param range laler.Range
+---@return boolean rejected
+local function reject_oversize(range)
+  if not range or not too_large(range.text) then
+    return false
+  end
+  notify("selection too large", vim.log.levels.WARN)
+  require_ctx().capture:delete_marks(range)
+  return true
+end
+
+---@param range laler.Range?
+---@return boolean rejected
+local function reject_empty(range)
+  if range and range.text and range.text ~= "" then
+    return false
+  end
+  notify("empty selection", vim.log.levels.WARN)
+  if range then
+    require_ctx().capture:delete_marks(range)
+  end
+  return true
+end
+
+--- Drop a pending picker so a stale `on_choice` is ignored (`gen ~= pick_gen`).
+local function invalidate_pick()
+  pick_gen = pick_gen + 1
+  if pending_pick_range then
+    require_ctx().capture:delete_marks(pending_pick_range)
+    pending_pick_range = nil
+  end
+end
+
+local function stop_session()
+  local c = require_ctx()
+  invalidate_pick()
+  c.jobs:cancel()
+  if active then
+    c.capture:delete_marks(active.range)
+  end
+  c.view:close()
+  active = nil
+end
+
 ---@return laler.ReviewCallbacks
 local function make_callbacks()
   local c = require_ctx()
@@ -100,28 +170,21 @@ local function make_callbacks()
       if not active then
         return
       end
-      if c.capture.refresh_from_marks and c.capture:refresh_from_marks(active.range) then
-        active.original = active.range.text
+      local range = active.range
+      local prompt_id = active.prompt_id
+      if c.capture.refresh_from_marks and c.capture:refresh_from_marks(range) then
+        active.original = range.text
       end
-      M._start_job(active.range, active.prompt_id)
+      if reject_empty(range) or reject_oversize(range) then
+        return
+      end
+      M._start_job(range, prompt_id)
     end,
     on_cancel = function()
-      local c2 = require_ctx()
-      c2.jobs:cancel()
-      if active then
-        c2.capture:delete_marks(active.range)
-      end
-      c2.view:close()
-      active = nil
+      stop_session()
     end,
     on_close = function()
-      local c2 = require_ctx()
-      c2.jobs:cancel()
-      if active then
-        c2.capture:delete_marks(active.range)
-      end
-      c2.view:close()
-      active = nil
+      stop_session()
     end,
   }
 end
@@ -145,43 +208,6 @@ function M._show_current()
   c.view:show_review(state, make_callbacks())
 end
 
----@param text string
----@return boolean
-local function too_large(text)
-  if type(text) ~= "string" then
-    return true
-  end
-  if #text > M.MAX_RANGE_BYTES then
-    return true
-  end
-  local nlines = 1
-  for _ in text:gmatch("\n") do
-    nlines = nlines + 1
-    if nlines > M.MAX_RANGE_LINES then
-      return true
-    end
-  end
-  return false
-end
-
---- Test helper: whether captured text exceeds the send cap.
----@param text string
----@return boolean
-function M._too_large(text)
-  return too_large(text)
-end
-
----@param range laler.Range
----@return boolean rejected
-local function reject_oversize(range)
-  if not range or not too_large(range.text) then
-    return false
-  end
-  notify("selection too large", vim.log.levels.WARN)
-  require_ctx().capture:delete_marks(range)
-  return true
-end
-
 ---@param range laler.Range
 ---@param prompt_id string
 function M._start_job(range, prompt_id)
@@ -189,6 +215,9 @@ function M._start_job(range, prompt_id)
   local prompt = c.catalog:get(prompt_id)
   if not prompt then
     notify("unknown prompt '" .. prompt_id .. "'", vim.log.levels.ERROR)
+    if not active or active.range ~= range then
+      c.capture:delete_marks(range)
+    end
     return
   end
 
@@ -226,13 +255,14 @@ function M._start_job(range, prompt_id)
 
   local spec = c.llm:request(composed)
   c.jobs:start(spec, {
-    on_exit = function(ok, stdout, stderr, code)
+    on_exit = function(ok, stdout, stderr, code, signal)
       if not active or active.gen ~= gen then
         return
       end
       if not ok then
         local msg
-        if code == 124 then
+        local timed_out = code == 124 or (signal or 0) ~= 0
+        if timed_out then
           local ms = c.config and c.config.timeout_ms
           if ms then
             msg = "timed out after " .. tostring(ms) .. " ms"
@@ -269,8 +299,7 @@ end
 ---@param prompt_id? string
 function M.run_with_range(range, prompt_id)
   local c = require_ctx()
-  if not range.text or range.text == "" then
-    notify("empty selection", vim.log.levels.WARN)
+  if reject_empty(range) then
     return
   end
   if reject_oversize(range) then
@@ -290,8 +319,7 @@ end
 ---@param range laler.Range
 function M.pick_and_run(range)
   local c = require_ctx()
-  if not range.text or range.text == "" then
-    notify("empty selection", vim.log.levels.WARN)
+  if reject_empty(range) then
     return
   end
   if reject_oversize(range) then
@@ -346,7 +374,7 @@ function M.pick_and_run(range)
           return
         end
       end
-      if reject_oversize(range) then
+      if reject_empty(range) or reject_oversize(range) then
         return
       end
       M._start_job(range, id)
@@ -355,19 +383,14 @@ function M.pick_and_run(range)
     if gen ~= pick_gen or request_gen ~= job_gen_at_pick then
       return
     end
+    pick_gen = pick_gen + 1
     pending_pick_range = nil
     c.capture:delete_marks(range)
   end)
 end
 
 function M.cancel()
-  local c = require_ctx()
-  c.jobs:cancel()
-  if active then
-    c.capture:delete_marks(active.range)
-  end
-  c.view:close()
-  active = nil
+  stop_session()
 end
 
 ---@return string[]

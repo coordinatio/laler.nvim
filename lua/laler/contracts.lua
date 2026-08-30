@@ -25,7 +25,7 @@
 ---@field cwd? string
 
 ---@class laler.JobCallbacks
----@field on_exit fun(ok: boolean, stdout: string, stderr: string, code: integer)
+---@field on_exit fun(ok: boolean, stdout: string, stderr: string, code: integer, signal?: integer)
 ---@field on_start? fun()
 
 ---@class laler.WordSpan

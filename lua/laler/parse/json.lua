@@ -65,36 +65,31 @@ local function extract_object_at(s, start)
   return s:sub(start, finish), finish
 end
 
----@param s string
----@return integer?
-local function first_delimiter(s)
-  local open = s:find("<<<LALER_TEXT", 1, true)
-  local close = s:find("<<<END_LALER_TEXT", 1, true)
-  if open and close then
-    return math.min(open, close)
-  end
-  return open or close
-end
-
---- Strip wrapping CR/LF (and blank lines made of them). Keep spaces/tabs.
+--- Strip at most one leading/trailing `\n` or `\r\n`. Keep blank lines in the passage.
 ---@param text string
 ---@return string
 local function strip_wrapping_newlines(text)
-  return (text:gsub("^[\r\n]+", ""):gsub("[\r\n]+$", ""))
+  if text:sub(1, 2) == "\r\n" then
+    text = text:sub(3)
+  elseif text:sub(1, 1) == "\n" then
+    text = text:sub(2)
+  end
+  if text:sub(-2) == "\r\n" then
+    text = text:sub(1, -3)
+  elseif text:sub(-1) == "\n" then
+    text = text:sub(1, -2)
+  end
+  return text
 end
 
 ---@param text string
 ---@return string
 local function scrub_variant_text(text)
   -- Fully wrapped in capture delimiters: keep the inner passage (indent intact).
+  -- Do not cut mid-text on delimiter prefixes; honest text may contain them.
   local wrapped = text:match("^[\r\n]*<<<LALER_TEXT[_%w]*>>>[\r\n]*(.-)[\r\n]*<<<END_LALER_TEXT[_%w]*>>>[\r\n]*$")
   if wrapped then
     return strip_wrapping_newlines(wrapped)
-  end
-  -- Leakage of prompt delimiters (including suffixed unique markers): cut there.
-  local idx = first_delimiter(text)
-  if idx then
-    text = text:sub(1, idx - 1)
   end
   return strip_wrapping_newlines(text)
 end
@@ -177,24 +172,30 @@ function M:parse(stdout)
     consider(fenced)
   end
 
-  local i = 1
+  -- Prefer the last successful `variants` object. Search backwards from the
+  -- last `{` so thinking-text braces do not hide the real payload. Cap
+  -- candidates; pathological `{{{` is also bounded by string length.
   local n = #stdout
-  -- Last valid object still wins, but cap `{` candidates so pathological
-  -- `{{{...` on huge output is not O(n²).
-  local candidates = 0
-  local MAX_OBJECT_CANDIDATES = 32
-  while i <= n and candidates < MAX_OBJECT_CANDIDATES do
-    local start = stdout:find("{", i, true)
-    if not start then
-      break
+  local MAX_OBJECT_CANDIDATES = 256
+  local starts = {}
+  for i = n, 1, -1 do
+    if stdout:byte(i) == 123 then
+      starts[#starts + 1] = i
+      if #starts >= MAX_OBJECT_CANDIDATES then
+        break
+      end
     end
-    candidates = candidates + 1
-    local blob, finish = extract_object_at(stdout, start)
-    if not blob or not finish then
-      i = start + 1
-    else
-      consider(blob)
-      i = finish + 1
+  end
+  for _, start in ipairs(starts) do
+    local blob = extract_object_at(stdout, start)
+    if blob then
+      local variants, err = decode_and_normalize(blob)
+      if variants then
+        last = variants
+        break
+      elseif err then
+        last_err = err
+      end
     end
   end
 
