@@ -253,8 +253,23 @@ function M:diff(original, variant)
 
   if old_s == new_s then
     lines[#lines + 1] = { kind = "meta", text = "(no changes)" }
-    for _, l in ipairs(old_lines) do
-      lines[#lines + 1] = { kind = "context", text = " " .. l }
+    local CONTEXT = 3
+    if #old_lines <= CONTEXT * 2 then
+      for _, l in ipairs(old_lines) do
+        lines[#lines + 1] = { kind = "context", text = " " .. l }
+      end
+    else
+      for i = 1, CONTEXT do
+        lines[#lines + 1] = { kind = "context", text = " " .. old_lines[i] }
+      end
+      local skip = #old_lines - CONTEXT * 2
+      lines[#lines + 1] = {
+        kind = "meta",
+        text = string.format("@@ skipped %d unchanged line%s @@", skip, skip == 1 and "" or "s"),
+      }
+      for i = #old_lines - CONTEXT + 1, #old_lines do
+        lines[#lines + 1] = { kind = "context", text = " " .. old_lines[i] }
+      end
     end
     return { lines = lines, word_spans = word_spans }
   end
@@ -265,11 +280,34 @@ function M:diff(original, variant)
     linematch = 120,
   }) or {}
 
-  -- Walk both sequences emitting context and hunks
+  -- Walk both sequences emitting capped context and hunks (±3 around changes).
+  local CONTEXT = 3
   local oi, ni = 1, 1
   local hunk_i = 1
 
+  local function emit_skipped_meta(n)
+    if n > 0 then
+      lines[#lines + 1] = {
+        kind = "meta",
+        text = string.format("@@ skipped %d unchanged line%s @@", n, n == 1 and "" or "s"),
+      }
+    end
+  end
+
   local function emit_context_until(o_end, n_end)
+    local available = 0
+    do
+      local t_oi, t_ni = oi, ni
+      while t_oi < o_end and t_ni < n_end do
+        available = available + 1
+        t_oi = t_oi + 1
+        t_ni = t_ni + 1
+      end
+    end
+    local skip = math.max(0, available - CONTEXT)
+    emit_skipped_meta(skip)
+    oi = oi + skip
+    ni = ni + skip
     while oi < o_end and ni < n_end do
       lines[#lines + 1] = { kind = "context", text = " " .. (old_lines[oi] or "") }
       oi = oi + 1
@@ -280,11 +318,24 @@ function M:diff(original, variant)
   while hunk_i <= #indices or oi <= #old_lines or ni <= #new_lines do
     local h = indices[hunk_i]
     if not h then
-      while oi <= #old_lines and ni <= #new_lines do
+      local available = 0
+      do
+        local t_oi, t_ni = oi, ni
+        while t_oi <= #old_lines and t_ni <= #new_lines do
+          available = available + 1
+          t_oi = t_oi + 1
+          t_ni = t_ni + 1
+        end
+      end
+      local keep = math.min(CONTEXT, available)
+      for _ = 1, keep do
         lines[#lines + 1] = { kind = "context", text = " " .. (old_lines[oi] or "") }
         oi = oi + 1
         ni = ni + 1
       end
+      emit_skipped_meta(available - keep)
+      oi = oi + (available - keep)
+      ni = ni + (available - keep)
       while oi <= #old_lines do
         lines[#lines + 1] = { kind = "delete", text = "-" .. (old_lines[oi] or "") }
         oi = oi + 1

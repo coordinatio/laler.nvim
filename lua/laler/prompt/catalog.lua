@@ -78,6 +78,9 @@ function M.new(opts)
       if type(def.id) ~= "string" or def.id == "" then
         error("laler: prompt missing string id")
       end
+      if def.id:find("%s") then
+        error("laler: prompt id must not contain whitespace")
+      end
       if by_id[def.id] then
         error("laler: duplicate prompt id '" .. def.id .. "'")
       end
@@ -99,6 +102,9 @@ function M.new(opts)
       def.id = def.id or id
       if type(def.id) ~= "string" or def.id == "" then
         error("laler: prompt missing string id")
+      end
+      if def.id:find("%s") then
+        error("laler: prompt id must not contain whitespace")
       end
       if by_id[def.id] then
         error("laler: duplicate prompt id '" .. def.id .. "'")
@@ -134,7 +140,7 @@ function M.new(opts)
   local catalog = {}
 
   function catalog:list()
-    return list
+    return vim.list_extend({}, list)
   end
 
   function catalog:get(id)

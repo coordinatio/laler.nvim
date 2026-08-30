@@ -15,8 +15,13 @@ M.MAX_RANGE_BYTES = 100000
 --- Line cap (newlines + 1); refuse accidental huge captures.
 M.MAX_RANGE_LINES = 10000
 
+local stop_session
+
 ---@param c laler.SessionCtx
 function M.bind(c)
+  if ctx then
+    stop_session()
+  end
   ctx = c
   request_gen = 0
   pick_gen = 0
@@ -107,7 +112,7 @@ local function invalidate_pick()
   end
 end
 
-local function stop_session()
+stop_session = function()
   local c = require_ctx()
   invalidate_pick()
   c.jobs:cancel()
@@ -171,7 +176,11 @@ local function make_callbacks()
       end
       local variant = active.variants[active.index]
       if variant then
-        yank_text(variant.text)
+        local text = variant.text
+        if c.apply and c.apply.normalize_apply_text then
+          text = c.apply.normalize_apply_text(text)
+        end
+        yank_text(text)
         notify("yanked " .. variant.label)
       end
     end,
@@ -181,7 +190,13 @@ local function make_callbacks()
       end
       local range = active.range
       local prompt_id = active.prompt_id
-      if c.capture.refresh_from_marks and c.capture:refresh_from_marks(range) then
+      if range.start_mark ~= nil or range.end_mark ~= nil then
+        local refreshed = c.capture.refresh_from_marks and c.capture:refresh_from_marks(range)
+        if not refreshed then
+          notify("selection is gone", vim.log.levels.WARN)
+          stop_session()
+          return
+        end
         active.original = range.text
       end
       if reject_empty(range) or reject_oversize(range) then
@@ -258,12 +273,18 @@ function M._start_job(range, prompt_id)
   if vim.api.nvim_buf_is_valid(range.bufnr) then
     ft = vim.bo[range.bufnr].filetype or ""
   end
-  local composed = c.composer:compose(prompt, {
-    text = range.text,
-    language = c.config.language or "en",
-    filetype = ft,
-    n_variants = c.config.n_variants or 3,
-  })
+  local ok_compose, composed = pcall(function()
+    return c.composer:compose(prompt, {
+      text = range.text,
+      language = c.config.language or "en",
+      filetype = ft,
+      n_variants = c.config.n_variants or 3,
+    })
+  end)
+  if not ok_compose then
+    c.view:show_error(tostring(composed), nil, make_callbacks())
+    return
+  end
 
   -- Capture cwd before the float steals the window (window-local :lcd).
   local cwd = vim.fn.getcwd()
@@ -391,39 +412,47 @@ function M.pick_and_run(range)
   local job_gen_at_pick = request_gen
   pending_pick_range = range
 
-  c.picker:pick(items, {
-    prompt = "laler prompt",
-    default_id = default_id,
-  }, function(id)
-    vim.schedule(function()
-      if gen ~= pick_gen or request_gen ~= job_gen_at_pick then
-        return
-      end
-      pending_pick_range = nil
-      if not id then
-        c.capture:delete_marks(range)
-        return
-      end
-      if c.capture.refresh_from_marks then
-        if not c.capture:refresh_from_marks(range) then
-          notify("selection is gone", vim.log.levels.WARN)
-          c.capture:delete_marks(range)
-          return
-        end
-      end
-      if reject_empty(range) or reject_oversize(range) then
-        return
-      end
-      M._start_job(range, id)
-    end)
-  end, function()
+  local function cancel_pick()
     if gen ~= pick_gen or request_gen ~= job_gen_at_pick then
       return
     end
     pick_gen = pick_gen + 1
     pending_pick_range = nil
     c.capture:delete_marks(range)
+  end
+
+  local ok_pick, pick_err = pcall(function()
+    c.picker:pick(items, {
+      prompt = "laler prompt",
+      default_id = default_id,
+    }, function(id)
+      vim.schedule(function()
+        if gen ~= pick_gen or request_gen ~= job_gen_at_pick then
+          return
+        end
+        pending_pick_range = nil
+        if not id then
+          c.capture:delete_marks(range)
+          return
+        end
+        if c.capture.refresh_from_marks then
+          if not c.capture:refresh_from_marks(range) then
+            notify("selection is gone", vim.log.levels.WARN)
+            c.capture:delete_marks(range)
+            return
+          end
+        end
+        if reject_empty(range) or reject_oversize(range) then
+          return
+        end
+        M._start_job(range, id)
+      end)
+    end, cancel_pick)
   end)
+  if not ok_pick then
+    cancel_pick()
+    notify(tostring(pick_err), vim.log.levels.ERROR)
+  end
 end
 
 function M.cancel()

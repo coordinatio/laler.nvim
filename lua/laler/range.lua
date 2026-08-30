@@ -194,10 +194,21 @@ local function make_range(bufnr, mode, start_row, start_col, end_row, end_col)
     text = text,
   }
 
+  local mark_end_row, mark_end_col = end_row, end_col
+  if mode == "line" then
+    local n = vim.api.nvim_buf_line_count(bufnr)
+    if end_row + 1 <= n then
+      -- Exclusive end: start of the next line, or past last line (line_count).
+      mark_end_row, mark_end_col = end_row + 1, 0
+    else
+      mark_end_row, mark_end_col = end_row, #line_at(bufnr, end_row)
+    end
+  end
+
   local ok_s, start_mark = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS, start_row, start_col, {
     right_gravity = false,
   })
-  local ok_e, end_mark = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS, end_row, end_col, {
+  local ok_e, end_mark = pcall(vim.api.nvim_buf_set_extmark, bufnr, NS, mark_end_row, mark_end_col, {
     right_gravity = true,
   })
   if ok_s and ok_e then
@@ -232,6 +243,19 @@ function M:delete_marks(range)
   range.end_mark = nil
 end
 
+--- Inclusive last line from a line-mode exclusive end extmark.
+--- Next-line `(row, 0)` → `row - 1`; EOL of last line stays on that row.
+---@param start_row integer
+---@param mark_row integer
+---@param mark_col integer
+---@return integer
+local function line_inclusive_end(start_row, mark_row, mark_col)
+  if mark_col == 0 and mark_row > start_row then
+    return mark_row - 1
+  end
+  return mark_row
+end
+
 --- Re-read buffer text between extmarks into `range` (positions + text).
 ---@param range laler.Range
 ---@return boolean
@@ -251,7 +275,15 @@ function M:refresh_from_marks(range)
     return false
   end
   range.start_row, range.start_col = s[1], s[2]
-  range.end_row, range.end_col = e[1], e[2]
+  if range.mode == "line" then
+    range.end_row = line_inclusive_end(s[1], e[1], e[2])
+    range.end_col = 0
+    if range.end_row < range.start_row then
+      return false
+    end
+  else
+    range.end_row, range.end_col = e[1], e[2]
+  end
   local ok, text = pcall(function()
     if range.mode == "line" then
       return table.concat(vim.api.nvim_buf_get_lines(range.bufnr, range.start_row, range.end_row + 1, false), "\n")
@@ -291,10 +323,6 @@ function M:from_visual()
       end_pos = vim.fn.getpos("'>")
     end
 
-    if visual_mode == "\22" then
-      return nil, "blockwise visual is not supported"
-    end
-
     local exclusive = in_visual and vim.o.selection == "exclusive"
     -- Anchor is inclusive; the cursor ('.') is excluded when selection=exclusive
     -- and we are still in visual mode. After Esc, `'<`/`'>` are inclusive.
@@ -306,6 +334,11 @@ function M:from_visual()
 
     local start_row = math.max(0, start_pos[2] - 1)
     local end_row = math.max(0, end_pos[2] - 1)
+
+    if visual_mode == "\22" then
+      -- Same policy as :'<,'>Laler: blockwise falls back to linewise rows.
+      return make_range(bufnr, "line", start_row, 0, end_row, 0)
+    end
 
     if visual_mode == "V" then
       return make_range(bufnr, "line", start_row, 0, end_row, 0)

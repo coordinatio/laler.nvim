@@ -69,6 +69,9 @@ function M.validate(cfg)
         if type(p.id) ~= "string" or p.id == "" then
           return false, "prompt " .. i .. " must have a string id"
         end
+        if p.id:find("%s") then
+          return false, "prompt id must not contain whitespace"
+        end
         if type(p.template) ~= "string" then
           return false, "prompt '" .. p.id .. "' must have a string template"
         end
@@ -82,6 +85,9 @@ function M.validate(cfg)
         local pid = p.id or id
         if type(pid) ~= "string" or pid == "" then
           return false, "prompt must have a string id"
+        end
+        if pid:find("%s") then
+          return false, "prompt id must not contain whitespace"
         end
         if type(p.template) ~= "string" then
           return false, "prompt '" .. tostring(pid) .. "' must have a string template"

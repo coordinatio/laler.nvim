@@ -20,7 +20,7 @@ function M.new(opts)
     end
 
     local cmd = opts.cmd
-    local args = opts.args or {}
+    local args = vim.list_extend({}, opts.args or {})
     if type(cmd) == "table" then
       if #cmd == 0 then
         error("laler: generic adapter cmd is empty")

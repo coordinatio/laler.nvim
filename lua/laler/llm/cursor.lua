@@ -17,6 +17,9 @@ end
 ---@param composed string
 ---@return laler.JobSpec
 function M:request(composed)
+  if type(composed) == "string" and #composed > 24000 then
+    error("laler: prompt too large for cursor adapter (use a smaller range)")
+  end
   -- `agent -p` takes the prompt as a positional argument; stdin is ignored.
   return {
     cmd = resolve_bin(),

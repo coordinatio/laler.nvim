@@ -52,6 +52,13 @@ function M:apply(range, text)
     end
     start_row, start_col = s[1], s[2]
     end_row, end_col = e[1], e[2]
+    if range.mode == "line" then
+      -- Line-mode end mark is exclusive (next line, or EOL of last line).
+      if end_col == 0 and end_row > start_row then
+        end_row = end_row - 1
+      end
+      end_col = 0
+    end
   end
 
   if start_row > end_row or (range.mode ~= "line" and start_row == end_row and start_col > end_col) then

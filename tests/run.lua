@@ -143,6 +143,10 @@ do
   catalog:remember("formal")
   assert_eq(catalog:default_id(), "formal", "remembers last")
   assert_true(catalog:get("concise") ~= nil, "get concise")
+  local listed = catalog:list()
+  local nlist = #listed
+  listed[#listed + 1] = { id = "hacked" }
+  assert_eq(#catalog:list(), nlist, "list() returns a shallow copy")
 end
 
 -- diff
@@ -679,7 +683,12 @@ do
   local fenced = "```json\n" .. example .. "\n```\n" .. '{"variants":[{"text":"Hello there"}]}'
   ok, variants = parser:parse(fenced)
   assert_true(ok, "fenced example then real parses")
-  assert_eq(variants[1].text, "Hello there", "prefers last after fenced example")
+  assert_eq(variants[1].text, "Hello there", "placeholder fenced falls back to later object")
+
+  local fenced_valid = '```json\n{"variants":[{"text":"from-fence"}]}\n```\nthinking {"variants":[{"text":"from-object"}]}'
+  ok, variants = parser:parse(fenced_valid)
+  assert_true(ok, "valid fenced plus later object")
+  assert_eq(variants[1].text, "from-fence", "valid fenced wins over later object")
 
   ok, variants = parser:parse('{"variants":[{"text":"good"},{"text":""}]}')
   assert_true(ok, "skips empty variant")
@@ -743,6 +752,14 @@ do
   assert_true(range ~= nil, "from_visual linewise " .. tostring(err))
   assert_eq(range.mode, "line", "visual linewise mode")
   assert_eq(range.text, "привет", "visual linewise text")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcde", "fghij" })
+  vim.cmd("normal! gg0" .. vim.api.nvim_replace_termcodes("<C-v>j2l", true, false, true))
+  range, err = capture:from_visual()
+  assert_true(range ~= nil, "from_visual blockwise " .. tostring(err))
+  assert_eq(range.mode, "line", "blockwise visual is linewise")
+  assert_eq(range.text, "abcde\nfghij", "blockwise visual uses line range")
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   vim.api.nvim_buf_delete(buf, { force = true })
 end
@@ -1677,6 +1694,455 @@ do
   assert_eq(apply.normalize_apply_text("qux\n"), "qux", "normalize strips one trailing nl")
   assert_eq(apply.normalize_apply_text("qux\r\n"), "qux", "normalize strips crlf")
   assert_eq(apply.normalize_apply_text("a\nb\n"), "a\nb", "normalize strips only one trailing")
+end
+
+-- re-bind tears down in-flight work
+do
+  local session = require("laler.session")
+  local cancel_n, close_n = 0, 0
+  local function stub_ctx()
+    return {
+      config = { language = "en", n_variants = 1 },
+      catalog = require("laler.prompt.catalog").new({}),
+      composer = require("laler.prompt.composer"),
+      llm = {
+        name = "fake",
+        request = function()
+          return { cmd = "true", args = {}, stdin = "" }
+        end,
+      },
+      jobs = {
+        start = function() end,
+        cancel = function()
+          cancel_n = cancel_n + 1
+        end,
+        is_running = function()
+          return false
+        end,
+      },
+      parser = require("laler.parse.json"),
+      picker = { pick = function() end },
+      diff = require("laler.diff.vim_diff"),
+      view = {
+        open_loading = function() end,
+        show_review = function() end,
+        show_error = function() end,
+        close = function()
+          close_n = close_n + 1
+        end,
+      },
+      capture = {
+        delete_marks = function() end,
+      },
+      apply = {
+        apply = function()
+          return true
+        end,
+      },
+    }
+  end
+  session.bind(stub_ctx())
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  session._start_job({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }, "correct")
+  cancel_n, close_n = 0, 0
+  session.bind(stub_ctx())
+  assert_true(cancel_n >= 1, "rebind cancels job")
+  assert_true(close_n >= 1, "rebind closes view")
+  assert_true(session._active() == nil, "rebind clears active")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- retry aborts if marks exist and refresh fails; no marks uses stored coords
+do
+  local session = require("laler.session")
+  local capture = require("laler.range")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  local last_cb
+  local view = {}
+  function view:open_loading() end
+  function view:show_review(_, cb)
+    last_cb = cb
+  end
+  function view:show_error() end
+  function view:close() end
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = view,
+    capture = capture,
+    apply = {
+      apply = function()
+        return true
+      end,
+      normalize_apply_text = require("laler.apply").normalize_apply_text,
+    },
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for gone retry " .. tostring(err))
+  session._start_job(range, "correct")
+  jobs.cbs[#jobs.cbs].on_exit(true, '{"variants":[{"text":"HELLO"}]}', "", 0)
+  assert_true(last_cb ~= nil, "review callbacks for gone retry")
+  local ns = vim.api.nvim_create_namespace("laler_range")
+  if range.start_mark then
+    vim.api.nvim_buf_del_extmark(buf, ns, range.start_mark)
+  end
+  if range.end_mark then
+    vim.api.nvim_buf_del_extmark(buf, ns, range.end_mark)
+  end
+  local cbs_before = #jobs.cbs
+  local old_notify = vim.notify
+  local msgs = {}
+  vim.notify = function(m)
+    msgs[#msgs + 1] = m
+  end
+  last_cb.on_retry()
+  vim.notify = old_notify
+  assert_true(session._active() == nil, "gone marks retry stops session")
+  assert_eq(#jobs.cbs, cbs_before, "gone marks does not start a job")
+  assert_true(tostring(msgs[#msgs] or ""):find("selection is gone", 1, true) ~= nil, "gone marks notify")
+
+  local nomark = {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "foo bar baz",
+  }
+  session._start_job(nomark, "correct")
+  jobs.cbs[#jobs.cbs].on_exit(true, '{"variants":[{"text":"HELLO"}]}', "", 0)
+  cbs_before = #jobs.cbs
+  last_cb.on_retry()
+  assert_eq(#jobs.cbs, cbs_before + 1, "retry without marks uses stored coords")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- picker pick() throw runs cancel path
+do
+  local session = require("laler.session")
+  local capture = require("laler.range")
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = {
+      start = function() end,
+      cancel = function() end,
+      is_running = function()
+        return false
+      end,
+    },
+    parser = require("laler.parse.json"),
+    picker = {
+      pick = function()
+        error("picker boom")
+      end,
+    },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = capture,
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for picker throw " .. tostring(err))
+  local mark = range.start_mark
+  local old_notify = vim.notify
+  vim.notify = function() end
+  local ok_pick = pcall(session.pick_and_run, range)
+  vim.notify = old_notify
+  assert_true(ok_pick, "pick_and_run does not throw")
+  assert_eq(range.start_mark, nil, "picker throw deletes marks")
+  if mark then
+    local leftover = vim.api.nvim_buf_get_extmark_by_id(buf, vim.api.nvim_create_namespace("laler_range"), mark, {})
+    assert_true(not leftover or #leftover == 0, "picker throw removes extmark")
+  end
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- line-mode exclusive end extmark
+do
+  local capture = require("laler.range")
+  local apply = require("laler.apply")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two", "three" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  local range, err = capture:from_command_range(1, 2)
+  assert_true(range ~= nil, "line 1-2 capture " .. tostring(err))
+  assert_eq(range.end_row, 1, "stored end_row is inclusive")
+  local ns = vim.api.nvim_create_namespace("laler_range")
+  local em = vim.api.nvim_buf_get_extmark_by_id(buf, ns, range.end_mark, {})
+  assert_eq(em[1], 2, "line end mark on next line")
+  assert_eq(em[2], 0, "line end mark col 0")
+  vim.api.nvim_buf_set_lines(buf, 1, 1, false, { "INSERTED" })
+  local ok_r = capture:refresh_from_marks(range)
+  assert_true(ok_r, "refresh after insert at start of line 2")
+  assert_eq(range.text, "one\nINSERTED\ntwo", "exclusive span includes insert between")
+  assert_eq(range.end_row, 2, "inclusive end_row after insert")
+  local ok, aerr = apply:apply(range, "REPLACED")
+  assert_true(ok, "apply exclusive line span " .. tostring(aerr))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  assert_eq(#lines, 2, "two lines remain")
+  assert_eq(lines[1], "REPLACED", "replaced exclusive span")
+  assert_eq(lines[2], "three", "line after exclusive end kept")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- yank uses normalize_apply_text
+do
+  local session = require("laler.session")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  local last_cb
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function(_, _, cb)
+        last_cb = cb
+      end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+      normalize_apply_text = require("laler.apply").normalize_apply_text,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  session._start_job({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }, "correct")
+  local old_notify = vim.notify
+  vim.notify = function() end
+  jobs.cbs[#jobs.cbs].on_exit(true, '{"variants":[{"text":"HELLO\\n"}]}', "", 0)
+  assert_true(last_cb ~= nil, "yank review callbacks")
+  last_cb.on_yank()
+  vim.notify = old_notify
+  assert_eq(vim.fn.getreg('"'), "HELLO", "yank matches apply text")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- whitespace in prompt ids
+do
+  local catalog = require("laler.prompt.catalog")
+  local config = require("laler.config")
+  local ok, err = pcall(function()
+    catalog.new({ prompts = { { id = "bad id", template = "x {{text}}" } } })
+  end)
+  assert_true(not ok, "space in id catalog errors")
+  assert_true(tostring(err):find("whitespace", 1, true) ~= nil, "space id catalog message")
+
+  ok, err = pcall(function()
+    catalog.new({ prompts = { { id = "bad\tid", template = "x {{text}}" } } })
+  end)
+  assert_true(not ok, "tab in id catalog errors")
+
+  ok, err = config.validate({ prompts = { { id = "bad id", template = "x" } } })
+  assert_true(not ok, "space in id config")
+  assert_true(tostring(err):find("whitespace", 1, true) ~= nil, "space id config message")
+  ok, err = config.validate({ prompts = { { id = "bad\nid", template = "x" } } })
+  assert_true(not ok, "newline in id config")
+end
+
+-- generic args copy
+do
+  local stored = { "-n", "--flag" }
+  local client = require("laler.llm.generic").new({ name = "echo", cmd = "echo", args = stored })
+  local spec = client:request("x")
+  spec.args[1] = "mutated"
+  assert_eq(stored[1], "-n", "generic args copy not mutated")
+  table.insert(spec.args, "extra")
+  assert_eq(#stored, 2, "generic stored args length")
+end
+
+-- compose failure shows error and does not throw
+do
+  local session = require("laler.session")
+  local errors = {}
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = {
+      compose = function()
+        error("compose fail")
+      end,
+    },
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = {
+      start = function() end,
+      cancel = function() end,
+      is_running = function()
+        return false
+      end,
+    },
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function(_, msg)
+        errors[#errors + 1] = msg
+      end,
+      close = function() end,
+    },
+    capture = {
+      delete_marks = function() end,
+    },
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  local threw = not pcall(session._start_job, {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }, "correct")
+  assert_true(not threw, "compose error does not throw")
+  assert_true(#errors > 0, "compose show_error")
+  assert_true(session._active() ~= nil, "compose fail keeps active with error UI")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- cursor composed-argv size
+do
+  local cursor = require("laler.llm.cursor")
+  local ok, err = pcall(function()
+    cursor:request(string.rep("x", 24001))
+  end)
+  assert_true(not ok, "huge cursor prompt errors")
+  assert_true(tostring(err):find("too large", 1, true) ~= nil, "cursor too large message")
+  local ok_small = pcall(function()
+    cursor:request("small")
+  end)
+  assert_true(ok_small, "small cursor prompt ok")
+end
+
+-- diff context cap
+do
+  local diff = require("laler.diff.vim_diff")
+  local oldt, newt = {}, {}
+  for i = 1, 20 do
+    oldt[i] = "line " .. i
+    newt[i] = "line " .. i
+  end
+  newt[20] = "changed"
+  local doc = diff:diff(table.concat(oldt, "\n"), table.concat(newt, "\n"))
+  local ctx_before = 0
+  for _, l in ipairs(doc.lines) do
+    if l.kind == "add" or l.kind == "delete" then
+      break
+    end
+    if l.kind == "context" then
+      ctx_before = ctx_before + 1
+    end
+  end
+  assert_true(ctx_before <= 3, "at most 3 context lines before hunk")
+  assert_true(ctx_before >= 1, "has context before last-line hunk")
+  local total_ctx = 0
+  for _, l in ipairs(doc.lines) do
+    if l.kind == "context" then
+      total_ctx = total_ctx + 1
+    end
+  end
+  assert_true(total_ctx < 20, "does not emit all 20 lines as context")
 end
 
 print(string.format("laler tests: %d passed, %d failed", passed, failed))

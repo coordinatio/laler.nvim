@@ -158,23 +158,19 @@ function M:parse(stdout)
   local last = nil
   local last_err = "could not find JSON object in model output"
 
-  local function consider(blob)
-    local variants, err = decode_and_normalize(blob)
-    if variants then
-      last = variants
-    else
-      last_err = err or last_err
-    end
-  end
-
   local fenced = extract_fenced(stdout)
   if fenced then
-    consider(fenced)
+    local variants, err = decode_and_normalize(fenced)
+    if variants then
+      return true, variants
+    end
+    last_err = err or last_err
   end
 
-  -- Prefer the last successful `variants` object. Search backwards from the
-  -- last `{` so thinking-text braces do not hide the real payload. Cap
-  -- candidates; pathological `{{{` is also bounded by string length.
+  -- Prefer the last successful `variants` object among unfenced `{`
+  -- candidates. Search backwards from the last `{` so thinking-text
+  -- braces do not hide the real payload. Cap candidates; pathological
+  -- `{{{` is also bounded by string length.
   local n = #stdout
   local MAX_OBJECT_CANDIDATES = 256
   local starts = {}
