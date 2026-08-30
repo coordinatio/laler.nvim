@@ -3,12 +3,10 @@ local M = {}
 
 ---@param s string
 ---@return string?
-local function extract_json_blob(s)
+local function extract_fenced(s)
   if not s or s == "" then
     return nil
   end
-
-  -- fenced ```json ... ```
   local fenced = s:match("```json%s*([\r\n].-[\r\n])```")
     or s:match("```json%s*(.-)```")
     or s:match("```%s*([\r\n]%s*{.-}[%s\r\n]*)```")
@@ -18,12 +16,15 @@ local function extract_json_blob(s)
       return trimmed
     end
   end
+  return nil
+end
 
-  -- first { ... matching last } (scan for outermost object)
-  local start = s:find("{", 1, true)
-  if not start then
-    return nil
-  end
+--- Extract a balanced `{ ... }` object starting at `start`. Skips strings.
+---@param s string
+---@param start integer
+---@return string? blob
+---@return integer? finish inclusive index of closing brace
+local function extract_object_at(s, start)
   local depth = 0
   local finish = nil
   local i = start
@@ -39,7 +40,6 @@ local function extract_json_blob(s)
         break
       end
     elseif ch == '"' then
-      -- skip strings
       i = i + 1
       while i <= n do
         local c = s:sub(i, i)
@@ -55,9 +55,9 @@ local function extract_json_blob(s)
     i = i + 1
   end
   if not finish then
-    return nil
+    return nil, nil
   end
-  return s:sub(start, finish)
+  return s:sub(start, finish), finish
 end
 
 ---@param text string
@@ -142,22 +142,48 @@ local function normalize(data)
   return out
 end
 
+---@param blob string
+---@return laler.Variant[]?, string?
+local function decode_and_normalize(blob)
+  local ok, data = pcall(vim.json.decode, blob)
+  if not ok then
+    return nil, "JSON decode failed: " .. tostring(data)
+  end
+  return normalize(data)
+end
+
 ---@param stdout string
 ---@return boolean, laler.Variant[]|string
 function M:parse(stdout)
-  local blob = extract_json_blob(stdout)
-  if not blob then
-    return false, "could not find JSON object in model output"
+  local fenced = extract_fenced(stdout)
+  if fenced then
+    local variants = decode_and_normalize(fenced)
+    if variants then
+      return true, variants
+    end
   end
-  local ok, data = pcall(vim.json.decode, blob)
-  if not ok then
-    return false, "JSON decode failed: " .. tostring(data)
+
+  local i = 1
+  local n = #stdout
+  local last_err = "could not find JSON object in model output"
+  while i <= n do
+    local start = stdout:find("{", i, true)
+    if not start then
+      break
+    end
+    local blob, finish = extract_object_at(stdout, start)
+    if not blob or not finish then
+      i = start + 1
+    else
+      local variants, err = decode_and_normalize(blob)
+      if variants then
+        return true, variants
+      end
+      last_err = err or last_err
+      i = finish + 1
+    end
   end
-  local variants, err = normalize(data)
-  if not variants then
-    return false, err
-  end
-  return true, variants
+  return false, last_err
 end
 
 return M

@@ -1,7 +1,22 @@
 ---@implements laler.JobRunner
 local M = {}
 
-local active = nil ---@type vim.SystemObj?
+local seq = 0
+local active = nil ---@type { obj: vim.SystemObj, gen: integer }?
+
+---@param job_gen integer
+---@param current_seq integer
+---@param active_gen integer|nil
+---@return boolean should_clear_active
+---@return boolean should_deliver
+local function resolve_exit(job_gen, current_seq, active_gen)
+  local clear = active_gen ~= nil and active_gen == job_gen
+  local deliver = job_gen == current_seq
+  return clear, deliver
+end
+
+--- Test helper: whether a callback for `job_gen` should clear the handle / run on_exit.
+M._resolve_exit = resolve_exit
 
 ---@param env table<string, string>|nil
 ---@return table<string, string>?
@@ -23,6 +38,9 @@ function M:start(spec, callbacks, opts)
   self:cancel()
   opts = opts or {}
 
+  seq = seq + 1
+  local gen = seq
+
   if vim.fn.executable(spec.cmd) ~= 1 then
     callbacks.on_exit(false, "", spec.cmd .. " not found in PATH", 127)
     return
@@ -42,12 +60,22 @@ function M:start(spec, callbacks, opts)
     text = true,
     timeout = opts.timeout_ms,
   }, function(obj)
-    active = nil
+    local clear, deliver = resolve_exit(gen, seq, active and active.gen or nil)
+    if clear then
+      active = nil
+    end
+    if not deliver then
+      return
+    end
     local stdout = obj.stdout or ""
     local stderr = obj.stderr or ""
     local code = obj.code or -1
     local success = code == 0
     vim.schedule(function()
+      local _, still = resolve_exit(gen, seq, active and active.gen or nil)
+      if not still then
+        return
+      end
       callbacks.on_exit(success, stdout, stderr, code)
     end)
   end)
@@ -56,15 +84,17 @@ function M:start(spec, callbacks, opts)
     callbacks.on_exit(false, "", tostring(obj_or_err), -1)
     return
   end
-  active = obj_or_err
+  active = { obj = obj_or_err, gen = gen }
 end
 
 function M:cancel()
+  seq = seq + 1
   if active then
-    pcall(function()
-      active:kill(15)
-    end)
+    local obj = active.obj
     active = nil
+    pcall(function()
+      obj:kill(15)
+    end)
   end
 end
 

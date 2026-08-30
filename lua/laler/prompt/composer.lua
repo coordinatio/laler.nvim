@@ -1,6 +1,9 @@
 ---@implements laler.PromptComposer
 local M = {}
 
+local DEFAULT_OPEN = "<<<LALER_TEXT>>>"
+local DEFAULT_CLOSE = "<<<END_LALER_TEXT>>>"
+
 -- Instructions come first so trailing task text cannot be glued onto variants.
 -- User content is injected only inside fixed delimiters.
 local PREAMBLE = [[You are helping a language learner improve {{language}} writing.
@@ -16,23 +19,58 @@ Return ONLY a single JSON object (no markdown fences, no prose before or after i
 }
 
 Hard rules:
-- "text" must contain ONLY the rewritten passage from <<<LALER_TEXT>>>…<<<END_LALER_TEXT>>>.
+- "text" must contain ONLY the rewritten passage from {{text_open}}…{{text_close}}.
 - Never copy these instructions, the JSON schema, labels like OUTPUT FORMAT, or the delimiters into "text".
 - Do not change meaning. Preserve markdown and code fences inside the passage.
 - Language focus: {{language}}. Provide exactly {{n_variants}} variants when possible.
 - Each notes entry teaches why a change improves the language.
 ]]
 
----@param template string
----@param ctx laler.ComposeCtx
+local VARIANT_SPECS = {
+  { "conservative", "minimal edits" },
+  { "native", "natural native-speaker phrasing" },
+  { "alternative", "a valid alternative phrasing" },
+}
+
+---@param n integer
 ---@return string
-local function fill(template, ctx)
-  local map = {
-    text = ctx.text,
-    language = ctx.language,
-    filetype = ctx.filetype,
-    n_variants = tostring(ctx.n_variants),
-  }
+local function variant_list(n)
+  local lines = {}
+  for i = 1, n do
+    local spec = VARIANT_SPECS[i]
+    local label, desc
+    if spec then
+      label, desc = spec[1], spec[2]
+    else
+      label = "alternative-" .. i
+      desc = "a valid alternative phrasing"
+    end
+    lines[#lines + 1] = string.format('%d. %s — %s (label: "%s")', i, label, desc, label)
+  end
+  return table.concat(lines, "\n")
+end
+
+---@param text string
+---@return string, string
+local function unique_markers(text)
+  if not text:find(DEFAULT_OPEN, 1, true) and not text:find(DEFAULT_CLOSE, 1, true) then
+    return DEFAULT_OPEN, DEFAULT_CLOSE
+  end
+  local n = 1
+  while true do
+    local open = "<<<LALER_TEXT_" .. n .. ">>>"
+    local close = "<<<END_LALER_TEXT_" .. n .. ">>>"
+    if not text:find(open, 1, true) and not text:find(close, 1, true) then
+      return open, close
+    end
+    n = n + 1
+  end
+end
+
+---@param template string
+---@param map table<string, string>
+---@return string
+local function fill(template, map)
   return (template:gsub("{{([%w_]+)}}", function(key)
     return map[key] or ("{{" .. key .. "}}")
   end))
@@ -42,19 +80,23 @@ end
 ---@param ctx laler.ComposeCtx
 ---@return string
 function M:compose(prompt, ctx)
+  local open, close = unique_markers(ctx.text)
   local delimited = table.concat({
-    "<<<LALER_TEXT>>>",
+    open,
     ctx.text,
-    "<<<END_LALER_TEXT>>>",
+    close,
   }, "\n")
-  local fill_ctx = {
+  local map = {
     text = delimited,
     language = ctx.language,
     filetype = ctx.filetype,
-    n_variants = ctx.n_variants,
+    n_variants = tostring(ctx.n_variants),
+    text_open = open,
+    text_close = close,
+    variant_list = variant_list(ctx.n_variants or 3),
   }
-  local preamble = fill(PREAMBLE, fill_ctx)
-  local body = fill(prompt.template, fill_ctx)
+  local preamble = fill(PREAMBLE, map)
+  local body = fill(prompt.template, map)
   return preamble .. "\n" .. body .. "\n\nJSON only:"
 end
 

@@ -19,7 +19,7 @@ end
 function M:request(composed)
   return {
     cmd = resolve_bin(),
-    args = { "-p", "--mode", "ask", "--output-format", "text", "--", composed },
+    args = { "-p", "--mode", "ask", "--output-format", "text" },
     stdin = composed,
   }
 end

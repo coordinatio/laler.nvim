@@ -9,6 +9,8 @@
 ---@field end_row integer 0-indexed
 ---@field end_col integer 0-indexed byte (exclusive for char mode)
 ---@field text string
+---@field start_mark? integer extmark id at range start (right_gravity = false)
+---@field end_mark? integer extmark id at exclusive end (right_gravity = true)
 
 ---@class laler.Variant
 ---@field label string

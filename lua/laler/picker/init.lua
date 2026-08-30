@@ -30,12 +30,22 @@ function M.autodetect()
   return M.get("vim_ui")
 end
 
---- Resolve picker: nil = auto, string name, or table implementing pick.
+--- Picker that autodetects on each pick() so lazy-loaded plugins are visible.
+---@return laler.Picker
+local function lazy_autodetect()
+  return {
+    pick = function(_, items, opts, on_choice, on_cancel)
+      return M.autodetect():pick(items, opts, on_choice, on_cancel)
+    end,
+  }
+end
+
+--- Resolve picker: nil = auto (at pick time), string name, or table implementing pick.
 ---@param picker string|laler.Picker|nil
 ---@return laler.Picker
 function M.resolve(picker)
   if picker == nil then
-    return M.autodetect()
+    return lazy_autodetect()
   end
   if type(picker) == "table" and picker.pick then
     return picker

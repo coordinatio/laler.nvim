@@ -187,6 +187,418 @@ do
   assert_true(type(err) == "string", "validate err")
 end
 
+-- UTF-8 exclusive end / range capture
+do
+  local capture = require("laler.range")
+  assert_eq(capture.utf_exclusive_end("привет", 1), 2, "cyrillic first char exclusive")
+  assert_eq(capture.utf_exclusive_end("привет", 11), 12, "cyrillic last char exclusive")
+  assert_eq(capture.utf_exclusive_end("€", 1), 3, "3-byte exclusive")
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "привет" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+
+  local got = vim.api.nvim_buf_get_text(buf, 0, 0, 0, capture.utf_exclusive_end("привет", 1), {})
+  assert_eq(got[1], "п", "get_text first cyrillic")
+  got = vim.api.nvim_buf_get_text(buf, 0, 0, 0, capture.utf_exclusive_end("привет", 11), {})
+  assert_eq(got[1], "привет", "get_text whole cyrillic word")
+
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 0, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 0, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "from_operator first char " .. tostring(err))
+  assert_eq(range.text, "п", "operator first cyrillic")
+  assert_eq(range.end_col, 2, "operator first char end_col")
+  got = vim.api.nvim_buf_get_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, {})
+  assert_eq(got[1], "п", "operator get_text first char")
+
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 0, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 10, {})
+  range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "from_operator word " .. tostring(err))
+  assert_eq(range.text, "привет", "operator whole word")
+  got = vim.api.nvim_buf_get_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, {})
+  assert_eq(got[1], "привет", "operator get_text whole word")
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "a€b" })
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 1, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 1, {})
+  range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "from_operator euro " .. tostring(err))
+  assert_eq(range.text, "€", "operator 3-byte char")
+  got = vim.api.nvim_buf_get_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, {})
+  assert_eq(got[1], "€", "operator get_text 3-byte")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- apply trailing newline (char and line)
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  local apply = require("laler.apply")
+  local ok, err = apply:apply({
+    bufnr = buf,
+    mode = "char",
+    start_row = 0,
+    start_col = 4,
+    end_row = 0,
+    end_col = 7,
+    text = "bar",
+  }, "qux\n")
+  assert_true(ok, "char apply trailing nl " .. tostring(err))
+  assert_eq(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "foo qux baz", "char apply strips one trailing nl")
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aaa", "bbb" })
+  ok, err = apply:apply({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "aaa",
+  }, "zzz\n")
+  assert_true(ok, "line apply trailing nl " .. tostring(err))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  assert_eq(#lines, 2, "line apply keeps two lines")
+  assert_eq(lines[1], "zzz", "line apply first")
+  assert_eq(lines[2], "bbb", "line apply second")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- apply follows extmarks after insert above
+do
+  local capture = require("laler.range")
+  local apply = require("laler.apply")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz", "second" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture bar " .. tostring(err))
+  assert_eq(range.text, "bar", "captured bar")
+  assert_true(range.start_mark ~= nil, "start mark set")
+  vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "INSERTED" })
+  local ok, aerr = apply:apply(range, "qux")
+  assert_true(ok, "apply after insert " .. tostring(aerr))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  assert_eq(lines[1], "INSERTED", "inserted line kept")
+  assert_eq(lines[2], "foo qux baz", "replacement followed text")
+  vim.api.nvim_buf_delete(buf, { force = true })
+
+  local ok_bad = apply:apply({
+    bufnr = 999999,
+    mode = "char",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 1,
+    text = "x",
+  }, "y")
+  assert_true(not ok_bad, "invalid buf apply fails")
+end
+
+-- command range clamp
+do
+  local capture = require("laler.range")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "a", "b", "c" })
+  vim.api.nvim_set_current_buf(buf)
+  local range, err = capture:from_command_range(2, 99)
+  assert_true(range ~= nil, "clamped range " .. tostring(err))
+  assert_eq(range.end_row, 2, "line2 clamped to last line")
+  assert_eq(range.text, "b\nc", "clamped text")
+  local bad, berr = capture:from_command_range(0, 2)
+  assert_true(bad == nil, "line1 < 1 invalid")
+  assert_true(type(berr) == "string", "invalid range err")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- diff insert/delete hunks
+do
+  local diff = require("laler.diff.vim_diff")
+  local after = diff:diff("hello", "hello\nworld")
+  assert_eq(after.lines[1].kind, "context", "insert-after context kind")
+  assert_eq(after.lines[1].text, " hello", "insert-after context text")
+  assert_eq(after.lines[2].kind, "add", "insert-after add kind")
+  assert_eq(after.lines[2].text, "+world", "insert-after add text")
+
+  local del = diff:diff("hello\nworld", "hello")
+  assert_eq(del.lines[1].kind, "context", "delete-last context kind")
+  assert_eq(del.lines[1].text, " hello", "delete-last context text")
+  assert_eq(del.lines[2].kind, "delete", "delete-last delete kind")
+  assert_eq(del.lines[2].text, "-world", "delete-last delete text")
+
+  local before = diff:diff("world", "hello\nworld")
+  assert_eq(before.lines[1].kind, "add", "insert-before add kind")
+  assert_eq(before.lines[1].text, "+hello", "insert-before add text")
+  assert_eq(before.lines[2].kind, "context", "insert-before context kind")
+  assert_eq(before.lines[2].text, " world", "insert-before context text")
+
+  local repl = diff:diff("foo", "bar")
+  assert_eq(repl.lines[1].kind, "delete", "same-line delete")
+  assert_eq(repl.lines[2].kind, "add", "same-line add")
+end
+
+-- unicode word tokenize
+do
+  local diff = require("laler.diff.vim_diff")
+  local tokens = diff._tokenize("Я пишу текст")
+  assert_true(#tokens > 1, "cyrillic splits into multiple tokens")
+  local doc = diff:diff("Я пишу текст", "Я написал текст")
+  assert_true(#doc.word_spans > 0, "unicode word spans exist")
+  local whole_line = false
+  local partial = false
+  for _, sp in ipairs(doc.word_spans) do
+    local line = doc.lines[sp.line].text
+    if sp.col_start <= 1 and sp.col_end >= #line then
+      whole_line = true
+    end
+    if (sp.col_end - sp.col_start) < (#line - 1) then
+      partial = true
+    end
+  end
+  assert_true(partial, "word span is a subset of the line")
+  assert_true(not whole_line, "word span is not the whole line")
+end
+
+-- JSON prose {code} then real object
+do
+  local parser = require("laler.parse.json")
+  local ok, variants = parser:parse('Sure, {code} looks off. {"variants":[{"text":"ok"}]}')
+  assert_true(ok, "parses after prose brace")
+  assert_eq(variants[1].text, "ok", "prose then object text")
+end
+
+-- composer delimiter collision
+do
+  local composer = require("laler.prompt.composer")
+  local passage = "keep <<<END_LALER_TEXT>>> this"
+  local out = composer:compose({
+    id = "t",
+    label = "T",
+    template = "BODY\n{{text}}",
+  }, {
+    text = passage,
+    language = "en",
+    filetype = "",
+    n_variants = 3,
+  })
+  local block = "<<<LALER_TEXT_1>>>\n" .. passage .. "\n<<<END_LALER_TEXT_1>>>"
+  assert_true(out:find(block, 1, true) ~= nil, "full passage wrapped uniquely")
+  assert_true(out:find("<<<LALER_TEXT_1>>>", 1, true) ~= nil, "unique open marker")
+  assert_true(out:find("<<<END_LALER_TEXT_1>>>", 1, true) ~= nil, "unique close marker")
+end
+
+-- n_variants list for correct template
+do
+  local composer = require("laler.prompt.composer")
+  local catalog = require("laler.prompt.catalog").new({})
+  local out = composer:compose(catalog:get("correct"), {
+    text = "hi",
+    language = "en",
+    filetype = "",
+    n_variants = 2,
+  })
+  assert_true(out:find("1. conservative", 1, true) ~= nil, "n=2 has conservative")
+  assert_true(out:find("2. native", 1, true) ~= nil, "n=2 has native")
+  assert_true(out:find("3. alternative", 1, true) == nil, "n=2 has no third variant")
+end
+
+-- config integer validation
+do
+  local config = require("laler.config")
+  local ok, err = config.validate({ n_variants = 1.5 })
+  assert_true(not ok, "rejects n_variants 1.5")
+  assert_true(type(err) == "string", "n_variants 1.5 err")
+  ok, err = config.validate({ timeout_ms = 0 })
+  assert_true(not ok, "rejects timeout_ms 0")
+  assert_true(type(err) == "string", "timeout_ms 0 err")
+end
+
+-- cursor / opencode: prompt on stdin, not argv
+do
+  local cursor = require("laler.llm.cursor")
+  local spec = cursor:request("SECRET_PROMPT")
+  assert_eq(spec.stdin, "SECRET_PROMPT", "cursor stdin")
+  local args_joined = table.concat(spec.args, "\0")
+  assert_true(not args_joined:find("SECRET_PROMPT", 1, true), "cursor args have no prompt")
+  assert_true(vim.tbl_contains(spec.args, "-p"), "cursor -p")
+  assert_true(vim.tbl_contains(spec.args, "--mode"), "cursor --mode")
+  assert_true(not vim.tbl_contains(spec.args, "--trust"), "cursor no --trust")
+
+  local oc = require("laler.llm.opencode")
+  local ospec = oc:request("SECRET_PROMPT")
+  assert_eq(ospec.stdin, "SECRET_PROMPT", "opencode stdin")
+  assert_true(not table.concat(ospec.args, "\0"):find("SECRET_PROMPT", 1, true), "opencode args have no prompt")
+  assert_eq(ospec.args[1], "run", "opencode run")
+  assert_true(vim.tbl_contains(ospec.args, "--format"), "opencode --format")
+end
+
+-- job generation helper
+do
+  local job = require("laler.job.vim_system")
+  local clear, deliver = job._resolve_exit(1, 2, 2)
+  assert_true(not clear, "stale job does not clear newer handle")
+  assert_true(not deliver, "stale job does not deliver")
+  clear, deliver = job._resolve_exit(2, 2, 2)
+  assert_true(clear, "current job clears its handle")
+  assert_true(deliver, "current job delivers")
+  clear, deliver = job._resolve_exit(1, 2, nil)
+  assert_true(not clear, "cancelled job does not clear")
+  assert_true(not deliver, "cancelled job does not deliver")
+end
+
+-- session ignores stale job callbacks
+do
+  local session = require("laler.session")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+
+  local reviews = {}
+  local last_cb
+  local view_closed = 0
+  local view = {}
+  function view:open_loading() end
+  function view:show_review(state, cb)
+    last_cb = cb
+    reviews[#reviews + 1] = state.variants[1].text
+  end
+  function view:show_error() end
+  function view:close()
+    view_closed = view_closed + 1
+  end
+
+  local apply_ok = true
+  local apply = {
+    apply = function()
+      if not apply_ok then
+        return false, "nope"
+      end
+      return true
+    end,
+  }
+
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = view,
+    capture = require("laler.range"),
+    apply = apply,
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  local range = {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }
+  session._start_job(range, "correct")
+  session._start_job(range, "correct")
+  jobs.cbs[1].on_exit(true, '{"variants":[{"text":"STALE"}]}', "", 0)
+  assert_eq(#reviews, 0, "stale callback ignored")
+  jobs.cbs[2].on_exit(true, '{"variants":[{"text":"FRESH"}]}', "", 0)
+  assert_eq(#reviews, 1, "fresh callback used")
+  assert_eq(reviews[1], "FRESH", "fresh text")
+
+  apply_ok = false
+  local old_notify = vim.notify
+  vim.notify = function() end
+  last_cb.on_apply()
+  vim.notify = old_notify
+  assert_eq(view_closed, 0, "failed apply keeps review UI")
+  assert_eq(#reviews, 1, "failed apply does not clear variants")
+
+  local threw = false
+  local ok_call, err_call = pcall(session._start_job, {
+    bufnr = 999999,
+    mode = "char",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 1,
+    text = "x",
+  }, "correct")
+  if not ok_call then
+    threw = true
+    print("FAIL extra: invalid bufnr threw " .. tostring(err_call))
+  end
+  assert_true(not threw, "invalid bufnr does not throw")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- review <Tab> keymap (optional / best-effort)
+do
+  local view = require("laler.view.float")
+  local diff = require("laler.diff.vim_diff")
+  local nop = function() end
+  local cb = {
+    on_apply = nop,
+    on_next = nop,
+    on_prev = nop,
+    on_jump = nop,
+    on_yank = nop,
+    on_retry = nop,
+    on_cancel = nop,
+    on_close = nop,
+  }
+  local ok_show = pcall(function()
+    view:show_review({
+      prompt_id = "correct",
+      adapter_name = "pi",
+      original = "a",
+      variants = { { label = "a", text = "b", notes = {} } },
+      index = 1,
+      diff_doc = diff:diff("a", "b"),
+    }, cb)
+  end)
+  assert_true(ok_show, "show_review for keymap test")
+  if ok_show then
+    local buf = vim.api.nvim_get_current_buf()
+    local maps = vim.api.nvim_buf_get_keymap(buf, "n")
+    local has_tab = false
+    local has_bare_tab = false
+    for _, m in ipairs(maps) do
+      if m.lhs == "<Tab>" or m.lhs == "\t" then
+        has_tab = true
+      end
+      if m.lhs == "Tab" then
+        has_bare_tab = true
+      end
+    end
+    assert_true(has_tab, "review maps <Tab>")
+    assert_true(not has_bare_tab, "review does not map bare Tab")
+    pcall(function()
+      view:close()
+    end)
+  end
+end
+
 print(string.format("laler tests: %d passed, %d failed", passed, failed))
 if failed > 0 then
   vim.cmd("cquit 1")

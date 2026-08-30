@@ -8,7 +8,7 @@ local M = {
 function M:request(composed)
   return {
     cmd = "opencode",
-    args = { "run", "--format", "default", composed },
+    args = { "run", "--format", "default" },
     stdin = composed,
     env = {
       OPENCODE_PERMISSION = vim.json.encode({

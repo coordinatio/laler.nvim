@@ -28,11 +28,15 @@ function M.validate(cfg)
   if type(cfg) ~= "table" then
     return false, "config must be a table"
   end
-  if cfg.n_variants ~= nil and (type(cfg.n_variants) ~= "number" or cfg.n_variants < 1) then
-    return false, "n_variants must be a positive number"
+  if cfg.n_variants ~= nil then
+    if type(cfg.n_variants) ~= "number" or cfg.n_variants < 1 or math.floor(cfg.n_variants) ~= cfg.n_variants then
+      return false, "n_variants must be an integer >= 1"
+    end
   end
-  if cfg.timeout_ms ~= nil and (type(cfg.timeout_ms) ~= "number" or cfg.timeout_ms < 0) then
-    return false, "timeout_ms must be a non-negative number"
+  if cfg.timeout_ms ~= nil then
+    if type(cfg.timeout_ms) ~= "number" or cfg.timeout_ms < 1 or math.floor(cfg.timeout_ms) ~= cfg.timeout_ms then
+      return false, "timeout_ms must be an integer >= 1"
+    end
   end
   if cfg.adapter ~= nil and type(cfg.adapter) ~= "string" and type(cfg.adapter) ~= "table" then
     return false, "adapter must be a string name or a table"

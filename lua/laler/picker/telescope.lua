@@ -32,28 +32,25 @@ function M:pick(items, opts, on_choice, on_cancel)
         end,
       }),
       sorter = conf.generic_sorter({}),
-      attach_mappings = function(prompt_bufnr, map)
+      attach_mappings = function(prompt_bufnr, _)
         local function select()
+          if chosen then
+            return
+          end
+          chosen = true
           local entry = action_state.get_selected_entry()
           actions.close(prompt_bufnr)
           if entry and entry.value then
-            chosen = true
             on_choice(entry.value)
           elseif on_cancel then
             on_cancel()
           end
         end
         actions.select_default:replace(select)
-        map("i", "<CR>", select)
-        map("n", "<CR>", select)
         return true
       end,
     })
     :find()
-
-  -- Telescope close without selection: listen via autocmd is heavy; rely on user Esc.
-  -- If they close without selecting, telescope may not call us — acceptable for v1.
-  _ = chosen
 end
 
 return M

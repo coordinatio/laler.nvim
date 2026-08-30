@@ -10,30 +10,72 @@ local function split_lines(s)
   return vim.split(s, "\n", { plain = true })
 end
 
+---@param ch string single UTF-8 character
+---@return boolean
+local function is_word_char(ch)
+  if ch == "_" or ch == "'" then
+    return true
+  end
+  local b = string.byte(ch, 1)
+  if b and b < 128 then
+    return ch:match("^[%w]$") ~= nil
+  end
+  -- Unicode letters / marks / digits. \p{L} is not available on all Nvim builds.
+  if vim.fn.match(ch, [[\p{L}]]) >= 0 then
+    return true
+  end
+  if vim.fn.match(ch, [[\p{M}]]) >= 0 then
+    return true
+  end
+  if vim.fn.match(ch, [[\p{Nd}]]) >= 0 then
+    return true
+  end
+  if vim.fn.match(ch, [[\k]]) >= 0 then
+    return true
+  end
+  local cc = vim.fn.charclass(ch)
+  -- 0 blank, 1 punctuation, 2 keyword, 3 emoji; other = specific Unicode class
+  return type(cc) == "number" and (cc == 2 or cc > 3)
+end
+
 --- Tokenize into words and separators (punctuation / whitespace runs kept).
 ---@param line string
 ---@return string[]
 local function tokenize(line)
   local tokens = {}
+  if line == "" then
+    return tokens
+  end
+  local positions = vim.str_utf_pos(line)
+  if not positions or #positions == 0 then
+    return { line }
+  end
+
+  local function char_at(byte_idx)
+    return line:sub(byte_idx, byte_idx + vim.str_utf_end(line, byte_idx))
+  end
+
   local i = 1
-  local n = #line
+  local n = #positions
   while i <= n do
-    local a, b = line:find("[%w_%']+", i)
-    if a and a == i then
-      tokens[#tokens + 1] = line:sub(a, b)
-      i = b + 1
-    else
-      -- group consecutive non-word chars
-      local j = i
-      while j <= n and not line:find("^[%w_%']", j) do
-        j = j + 1
+    local start_byte = positions[i]
+    local word = is_word_char(char_at(start_byte))
+    local j = i + 1
+    while j <= n do
+      if is_word_char(char_at(positions[j])) ~= word then
+        break
       end
-      tokens[#tokens + 1] = line:sub(i, j - 1)
-      i = j
+      j = j + 1
     end
+    local last_byte = positions[j - 1]
+    local end_byte = last_byte + vim.str_utf_end(line, last_byte)
+    tokens[#tokens + 1] = line:sub(start_byte, end_byte)
+    i = j
   end
   return tokens
 end
+
+M._tokenize = tokenize
 
 ---@param a string[]
 ---@param b string[]
@@ -103,6 +145,18 @@ local function add_word_spans(old_line, new_line, delete_line_idx, add_line_idx,
   end
 end
 
+--- First line index of a hunk (1-based). When count==0, `start` is the
+--- insertion point (line after which to insert; 0 = beginning).
+---@param start integer
+---@param count integer
+---@return integer
+local function hunk_line_start(start, count)
+  if count == 0 then
+    return start + 1
+  end
+  return start
+end
+
 ---@param original string
 ---@param variant string
 ---@return laler.DiffDoc
@@ -164,7 +218,7 @@ function M:diff(original, variant)
     end
 
     local start_a, count_a, start_b, count_b = h[1], h[2], h[3], h[4]
-    emit_context_until(start_a, start_b)
+    emit_context_until(hunk_line_start(start_a, count_a), hunk_line_start(start_b, count_b))
 
     local del_texts = {}
     local add_texts = {}

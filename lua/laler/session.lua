@@ -3,8 +3,10 @@ local M = {}
 ---@type laler.SessionCtx?
 local ctx = nil
 
----@type { range: laler.Range, prompt_id: string, variants?: laler.Variant[], index?: integer, original?: string, raw?: string }?
+---@type { range: laler.Range, prompt_id: string, variants?: laler.Variant[], index?: integer, original?: string, raw?: string, gen: integer }?
 local active = nil
+
+local request_gen = 0
 
 ---@param c laler.SessionCtx
 function M.bind(c)
@@ -23,6 +25,13 @@ local function notify(msg, level)
   vim.notify("laler: " .. msg, level or vim.log.levels.INFO)
 end
 
+---@param text string
+local function yank_text(text)
+  vim.fn.setreg('"', text)
+  pcall(vim.fn.setreg, "+", text)
+  pcall(vim.fn.setreg, "*", text)
+end
+
 ---@return laler.ReviewCallbacks
 local function make_callbacks()
   local c = require_ctx()
@@ -36,11 +45,12 @@ local function make_callbacks()
         return
       end
       local ok, err = c.apply:apply(active.range, variant.text)
-      c.view:close()
-      active = nil
       if not ok then
         notify(err or "apply failed", vim.log.levels.ERROR)
+        return
       end
+      c.view:close()
+      active = nil
     end,
     on_next = function()
       if not active or not active.variants then
@@ -74,7 +84,7 @@ local function make_callbacks()
       end
       local variant = active.variants[active.index]
       if variant then
-        vim.fn.setreg('"', variant.text)
+        yank_text(variant.text)
         notify("yanked " .. variant.label)
       end
     end,
@@ -129,13 +139,19 @@ function M._start_job(range, prompt_id)
   end
 
   c.catalog:remember(prompt_id)
+  request_gen = request_gen + 1
+  local gen = request_gen
   active = {
     range = range,
     prompt_id = prompt_id,
     original = range.text,
+    gen = gen,
   }
 
-  local ft = vim.bo[range.bufnr].filetype or ""
+  local ft = ""
+  if vim.api.nvim_buf_is_valid(range.bufnr) then
+    ft = vim.bo[range.bufnr].filetype or ""
+  end
   local composed = c.composer:compose(prompt, {
     text = range.text,
     language = c.config.language or "en",
@@ -149,7 +165,7 @@ function M._start_job(range, prompt_id)
   local spec = c.llm:request(composed)
   c.jobs:start(spec, {
     on_exit = function(ok, stdout, stderr, code)
-      if not active then
+      if not active or active.gen ~= gen then
         return
       end
       if not ok then

@@ -2,6 +2,25 @@
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("laler_diff")
+local AUGROUP = vim.api.nvim_create_augroup("laler_float", { clear = true })
+
+local REVIEW_KEYS = {
+  "q",
+  "<Esc>",
+  "<CR>",
+  "Tab",
+  "<Tab>",
+  "<S-Tab>",
+  "n",
+  "]",
+  "p",
+  "[",
+  "y",
+  "r",
+}
+for i = 1, 9 do
+  REVIEW_KEYS[#REVIEW_KEYS + 1] = tostring(i)
+end
 
 local state = {
   win = nil ---@type integer?
@@ -10,6 +29,7 @@ local state = {
   ,
   callbacks = nil ---@type laler.ReviewCallbacks?
   ,
+  closing = false,
 }
 
 local function define_highlights()
@@ -37,6 +57,36 @@ local function define_highlights()
     hi("LalerNotes", { fg = "#555533" })
     hi("LalerHint", { fg = "#888888" })
   end
+end
+
+local function notify_closed()
+  if state.closing then
+    return
+  end
+  local cb = state.callbacks
+  state.callbacks = nil
+  if cb and cb.on_close then
+    cb.on_close()
+  end
+end
+
+local function attach_lifecycle(buf, win)
+  vim.api.nvim_clear_autocmds({ group = AUGROUP })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = AUGROUP,
+    callback = function(ev)
+      if tostring(win) == ev.match then
+        notify_closed()
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    group = AUGROUP,
+    buffer = buf,
+    callback = function()
+      notify_closed()
+    end,
+  })
 end
 
 local function ensure_buf()
@@ -78,6 +128,7 @@ local function open_win(buf)
   vim.wo[win].breakindent = true
   vim.wo[win].cursorline = true
   state.win = win
+  attach_lifecycle(buf, win)
   return win
 end
 
@@ -90,9 +141,17 @@ local function set_lines(buf, lines)
 end
 
 ---@param buf integer
+local function clear_maps(buf)
+  for _, lhs in ipairs(REVIEW_KEYS) do
+    pcall(vim.keymap.del, "n", lhs, { buffer = buf })
+  end
+end
+
+---@param buf integer
 ---@param callbacks laler.ReviewCallbacks
 ---@param mode "loading"|"review"|"error"
 local function map_keys(buf, callbacks, mode)
+  clear_maps(buf)
   local opts = { buffer = buf, nowait = true, silent = true, noremap = true }
   local function map(lhs, rhs)
     vim.keymap.set("n", lhs, rhs, opts)
@@ -113,7 +172,7 @@ local function map_keys(buf, callbacks, mode)
     map("<CR>", function()
       callbacks.on_apply()
     end)
-    map("Tab", function()
+    map("<Tab>", function()
       callbacks.on_next()
     end)
     map("n", function()
@@ -272,6 +331,11 @@ function M:show_error(err, raw, callbacks)
 end
 
 function M:close()
+  if state.closing then
+    return
+  end
+  state.closing = true
+  state.callbacks = nil
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     pcall(vim.api.nvim_win_close, state.win, true)
   end
@@ -280,7 +344,7 @@ function M:close()
     pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
   end
   state.buf = nil
-  state.callbacks = nil
+  state.closing = false
 end
 
 return M
