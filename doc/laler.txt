@@ -1,0 +1,140 @@
+*laler.txt*  Language learner — LLM text correction with delta-style review
+
+Author: laler.nvim
+Neovim: 0.10+
+
+==============================================================================
+CONTENTS                                                        *laler-contents*
+
+  1. Intro ................ |laler-intro|
+  2. Setup ................ |laler-setup|
+  3. Commands ............. |laler-commands|
+  4. Mappings ............. |laler-mappings|
+  5. Review UI ............ |laler-review|
+  6. Adapters ............. |laler-adapters|
+  7. Prompts .............. |laler-prompts|
+  8. Architecture ......... |laler-architecture|
+
+==============================================================================
+INTRO                                                              *laler-intro*
+
+laler (Language Learner) helps you improve language use while writing in
+Neovim: select text, run a prompt through a CLI LLM (pi, Cursor agent,
+OpenCode, or custom), review several corrected variants with a delta-style
+diff and learning notes, then apply one with <CR>.
+
+==============================================================================
+SETUP                                                              *laler-setup*
+
+>lua
+  require("laler").setup({
+    adapter = "pi",           -- "cursor" | "opencode" | custom table
+    language = "en",
+    n_variants = 3,
+    default_prompt = "correct",
+    remember_last_prompt = true,
+    picker = nil,             -- "fzf-lua" | "telescope" | "vim_ui" | nil=auto
+    timeout_ms = 60000,
+    mappings = {
+      run = "<leader>ll",
+      pick = "<leader>lL",
+    },
+    -- prompts = { ... },    -- override built-in prompt list
+  })
+<
+
+No mappings are created unless `mappings` is set.
+
+==============================================================================
+COMMANDS                                                        *laler-commands*
+
+:[range]Laler [prompt]                                              *:Laler*
+    Correct the given line range (default: current line) with [prompt],
+    or the default/last-used prompt if omitted.
+
+:[range]LalerPick                                               *:LalerPick*
+    Open a prompt picker, then correct the range.
+
+:LalerCancel                                                  *:LalerCancel*
+    Cancel the in-flight job and close the review float.
+
+==============================================================================
+MAPPINGS                                                        *laler-mappings*
+
+When configured:
+  Normal: `run` / `pick` are operators — e.g. `<leader>llip`, `<leader>llap`
+  Visual: `run` / `pick` use the current selection (char/line; not block)
+
+==============================================================================
+REVIEW UI                                                         *laler-review*
+
+After the model responds, a float shows:
+  • header: prompt, variant index, adapter
+  • unified two-tier diff (line + word highlights)
+  • notes explaining language changes
+  • key hints
+
+Keys~
+  <CR>       apply current variant to the original range
+  Tab / n / ]   next variant
+  S-Tab / p / [ previous variant
+  1-9        jump to variant N
+  y          yank variant text
+  r          retry same prompt
+  q / <Esc>  close (Esc also cancels while loading)
+
+==============================================================================
+ADAPTERS                                                        *laler-adapters*
+
+Built-ins (tools disabled so agents do not edit files):
+
+  pi         `pi -p --no-tools --no-session`  (prompt on stdin)
+  cursor     `agent` or `cursor-agent` with `-p --mode ask`
+  opencode   `opencode run` with write/edit denied via env
+
+Custom adapter table~
+>lua
+  require("laler").setup({
+    adapter = {
+      name = "my-cli",
+      cmd = "my-llm",
+      args = { "--print" },
+    },
+  })
+<
+
+Or register at runtime:
+>lua
+  require("laler.llm").register("mine", client)
+<
+
+==============================================================================
+PROMPTS                                                          *laler-prompts*
+
+Built-in ids: `correct`, `formal`, `casual`, `concise`.
+
+Templates may use placeholders: `{{text}}`, `{{language}}`, `{{filetype}}`,
+`{{n_variants}}`. The composer appends a JSON-only output contract.
+
+Expected model JSON~
+>json
+  {
+    "variants": [
+      {
+        "label": "native",
+        "text": "...",
+        "notes": ["why this change helps"]
+      }
+    ]
+  }
+<
+
+==============================================================================
+ARCHITECTURE                                                *laler-architecture*
+
+SOLID-oriented Lua modules: `session` orchestrates ports wired in `setup()`.
+Ports are documented in `lua/laler/contracts.lua`. Implementations live under
+`llm/`, `picker/`, `diff/`, `view/`, `job/`, `parse/`, `prompt/`.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
