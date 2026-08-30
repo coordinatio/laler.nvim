@@ -20,13 +20,54 @@ end
 
 ---@param ch string single UTF-8 character
 ---@return boolean
+local function is_kana_or_hangul(ch)
+  local cp = vim.fn.char2nr(ch)
+  -- Hiragana
+  if cp >= 0x3040 and cp <= 0x309F then
+    return true
+  end
+  -- Katakana + phonetic extensions
+  if cp >= 0x30A0 and cp <= 0x30FF then
+    return true
+  end
+  if cp >= 0x31F0 and cp <= 0x31FF then
+    return true
+  end
+  -- Halfwidth Katakana
+  if cp >= 0xFF65 and cp <= 0xFF9F then
+    return true
+  end
+  -- Hangul Jamo / Compatibility Jamo / syllables / Extended-A/B
+  if cp >= 0x1100 and cp <= 0x11FF then
+    return true
+  end
+  if cp >= 0x3130 and cp <= 0x318F then
+    return true
+  end
+  if cp >= 0xA960 and cp <= 0xA97F then
+    return true
+  end
+  if cp >= 0xAC00 and cp <= 0xD7AF then
+    return true
+  end
+  if cp >= 0xD7B0 and cp <= 0xD7FF then
+    return true
+  end
+  return false
+end
+
+---@param ch string single UTF-8 character
+---@return boolean
 local function is_cjk_char(ch)
   local b = string.byte(ch, 1)
   if b and b < 128 then
     return false
   end
+  if is_kana_or_hangul(ch) then
+    return false
+  end
   local cc = vim.fn.charclass(ch)
-  -- 0 blank, 1 punctuation, 2 keyword, 3 emoji; >3 = specific Unicode class (CJK)
+  -- 0 blank, 1 punctuation, 2 keyword, 3 emoji; >3 = specific Unicode class (Han/CJK)
   return type(cc) == "number" and cc > 3
 end
 
@@ -43,8 +84,11 @@ local function is_word_char(ch)
   if is_combining(ch) then
     return true
   end
+  if is_kana_or_hangul(ch) then
+    return true
+  end
   local cc = vim.fn.charclass(ch)
-  -- Keyword class groups Latin/Cyrillic/etc. CJK is handled per-character.
+  -- Keyword class groups Latin/Cyrillic/etc. Han/CJK is handled per-character.
   return cc == 2
 end
 

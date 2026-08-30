@@ -71,7 +71,11 @@ require("laler").setup({
 })
 ```
 
-Prompt is always sent on **stdin**. Built-in adapters disable agent tools so they do not edit files.
+Prompt is always sent on **stdin**. Built-in adapters disable agent tools so they do not edit files:
+
+- **pi:** `-p --no-tools --no-session --no-context-files --no-extensions --no-skills`
+- **cursor:** `-p --mode ask --output-format text --trust` (workspace trust for headless; not `--force`)
+- **opencode:** `run --format default --pure --permissions` with an empty allowlist (omitted tools are denied), plus `OPENCODE_PERMISSION` deny-all
 
 ## Built-in prompts
 

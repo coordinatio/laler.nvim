@@ -77,6 +77,26 @@ local function notify_closed()
   end
 end
 
+---@return table
+local function win_config()
+  local width = math.max(1, math.min(100, math.floor(vim.o.columns * 0.8)))
+  local height = math.max(1, math.min(28, math.floor(vim.o.lines * 0.7)))
+  local row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1)
+  local col = math.max(0, math.floor((vim.o.columns - width) / 2))
+  return {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " laler ",
+    title_pos = "center",
+    zindex = 50,
+  }
+end
+
 local function attach_lifecycle(buf, win)
   vim.api.nvim_clear_autocmds({ group = AUGROUP })
   vim.api.nvim_create_autocmd("WinClosed", {
@@ -92,6 +112,14 @@ local function attach_lifecycle(buf, win)
     buffer = buf,
     callback = function()
       notify_closed()
+    end,
+  })
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = AUGROUP,
+    callback = function()
+      if state.win and vim.api.nvim_win_is_valid(state.win) then
+        pcall(vim.api.nvim_win_set_config, state.win, win_config())
+      end
     end,
   })
 end
@@ -114,22 +142,7 @@ local function open_win(buf)
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     return state.win
   end
-  local width = math.min(100, math.floor(vim.o.columns * 0.8))
-  local height = math.min(28, math.floor(vim.o.lines * 0.7))
-  local row = math.floor((vim.o.lines - height) / 2) - 1
-  local col = math.floor((vim.o.columns - width) / 2)
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
-    style = "minimal",
-    border = "rounded",
-    title = " laler ",
-    title_pos = "center",
-    zindex = 50,
-  })
+  local win = vim.api.nvim_open_win(buf, true, win_config())
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
   vim.wo[win].breakindent = true

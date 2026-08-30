@@ -18,19 +18,6 @@ end
 --- Test helper: whether a callback for `job_gen` should clear the handle / run on_exit.
 M._resolve_exit = resolve_exit
 
----@param env table<string, string>|nil
----@return table<string, string>?
-local function merge_env(env)
-  if not env then
-    return nil
-  end
-  local base = vim.fn.environ()
-  for k, v in pairs(env) do
-    base[k] = v
-  end
-  return base
-end
-
 ---@param spec laler.JobSpec
 ---@param callbacks laler.JobCallbacks
 ---@param opts? { timeout_ms?: integer }
@@ -56,7 +43,10 @@ function M:start(spec, callbacks, opts)
   local ok, obj_or_err = pcall(vim.system, cmd, {
     stdin = spec.stdin,
     cwd = spec.cwd or vim.fn.getcwd(),
-    env = merge_env(spec.env),
+    -- Pass spec.env as extra keys only. Do not pre-merge vim.fn.environ():
+    -- Neovim already merges unless clear_env, and a full environ() copy
+    -- restores NVIM / NVIM_LISTEN_ADDRESS into the child.
+    env = spec.env,
     text = true,
     timeout = opts.timeout_ms,
   }, function(obj)
@@ -102,14 +92,16 @@ function M:cancel()
     if active and (active.obj == dying.obj or active.gen == dying.gen) then
       return
     end
-    local finished = false
-    pcall(function()
-      local result = dying.obj:wait(0)
-      if result ~= nil then
-        finished = true
-      end
+    -- SystemObj:wait(timeout) kills the process on timeout; wait(0) is not a
+    -- poll. Skip if already closing, otherwise SIGKILL this dying object only.
+    local closing = false
+    local ok_close, is_closing = pcall(function()
+      return dying.obj:is_closing()
     end)
-    if not finished then
+    if ok_close and is_closing then
+      closing = true
+    end
+    if not closing then
       pcall(function()
         dying.obj:kill(9)
       end)

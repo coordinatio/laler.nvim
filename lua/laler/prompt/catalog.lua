@@ -74,14 +74,21 @@ function M.new(opts)
       if type(p) ~= "table" then
         error("laler: prompt must be a table")
       end
-      if type(p.id) ~= "string" or p.id == "" then
+      local def = vim.tbl_extend("force", {}, p)
+      if type(def.id) ~= "string" or def.id == "" then
         error("laler: prompt missing string id")
       end
-      if type(p.template) ~= "string" then
-        error("laler: prompt '" .. p.id .. "' must have a string template")
+      if by_id[def.id] then
+        error("laler: duplicate prompt id '" .. def.id .. "'")
       end
-      list[#list + 1] = p
-      by_id[p.id] = p
+      if type(def.template) ~= "string" then
+        error("laler: prompt '" .. def.id .. "' must have a string template")
+      end
+      if type(def.label) ~= "string" or def.label == "" then
+        def.label = def.id
+      end
+      list[#list + 1] = def
+      by_id[def.id] = def
     end
   else
     for id, p in pairs(source) do
@@ -93,8 +100,14 @@ function M.new(opts)
       if type(def.id) ~= "string" or def.id == "" then
         error("laler: prompt missing string id")
       end
+      if by_id[def.id] then
+        error("laler: duplicate prompt id '" .. def.id .. "'")
+      end
       if type(def.template) ~= "string" then
         error("laler: prompt '" .. def.id .. "' must have a string template")
+      end
+      if type(def.label) ~= "string" or def.label == "" then
+        def.label = def.id
       end
       list[#list + 1] = def
       by_id[def.id] = def

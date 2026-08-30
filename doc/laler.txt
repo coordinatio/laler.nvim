@@ -88,9 +88,12 @@ ADAPTERS                                                        *laler-adapters*
 
 Built-ins (tools disabled so agents do not edit files):
 
-  pi         `pi -p --no-tools --no-session --no-context-files --no-extensions`
-  cursor     `agent` or `cursor-agent` with `-p --mode ask`
-  opencode   `opencode run` with all tools denied via OPENCODE_PERMISSION
+  pi         `pi -p --no-tools --no-session --no-context-files --no-extensions
+             --no-skills`
+  cursor     `agent` or `cursor-agent` with `-p --mode ask --output-format text
+             --trust` (workspace trust; not `--force`)
+  opencode   `opencode run --format default --pure --permissions` with an empty
+             allowlist (omitted tools denied); OPENCODE_PERMISSION deny-all
 
 Custom adapter table~
 >lua

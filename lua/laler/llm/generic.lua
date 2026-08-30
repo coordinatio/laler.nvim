@@ -3,7 +3,9 @@ local M = {}
 ---@param opts { name?: string, cmd: string|string[], args?: string[], env?: table<string,string>, cwd?: string, build?: fun(composed: string): laler.JobSpec }
 ---@return laler.LlmClient
 function M.new(opts)
-  assert(opts and (opts.cmd or opts.build), "laler.llm.generic: cmd or build required")
+  if not opts or not (opts.cmd or opts.build) then
+    error("laler: generic adapter requires cmd or build")
+  end
 
   local name = opts.name or "custom"
 

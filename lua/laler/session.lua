@@ -7,6 +7,13 @@ local ctx = nil
 local active = nil
 
 local request_gen = 0
+local pick_gen = 0
+local pending_pick_range = nil ---@type laler.Range?
+
+--- Byte cap so a mistaken whole-buffer range is not sent to the model.
+M.MAX_RANGE_BYTES = 100000
+--- Line cap (newlines + 1); refuse accidental huge captures.
+M.MAX_RANGE_LINES = 10000
 
 ---@param c laler.SessionCtx
 function M.bind(c)
@@ -138,6 +145,43 @@ function M._show_current()
   c.view:show_review(state, make_callbacks())
 end
 
+---@param text string
+---@return boolean
+local function too_large(text)
+  if type(text) ~= "string" then
+    return true
+  end
+  if #text > M.MAX_RANGE_BYTES then
+    return true
+  end
+  local nlines = 1
+  for _ in text:gmatch("\n") do
+    nlines = nlines + 1
+    if nlines > M.MAX_RANGE_LINES then
+      return true
+    end
+  end
+  return false
+end
+
+--- Test helper: whether captured text exceeds the send cap.
+---@param text string
+---@return boolean
+function M._too_large(text)
+  return too_large(text)
+end
+
+---@param range laler.Range
+---@return boolean rejected
+local function reject_oversize(range)
+  if not range or not too_large(range.text) then
+    return false
+  end
+  notify("selection too large", vim.log.levels.WARN)
+  require_ctx().capture:delete_marks(range)
+  return true
+end
+
 ---@param range laler.Range
 ---@param prompt_id string
 function M._start_job(range, prompt_id)
@@ -146,6 +190,15 @@ function M._start_job(range, prompt_id)
   if not prompt then
     notify("unknown prompt '" .. prompt_id .. "'", vim.log.levels.ERROR)
     return
+  end
+
+  if pending_pick_range and pending_pick_range ~= range then
+    c.capture:delete_marks(pending_pick_range)
+  end
+  pending_pick_range = nil
+
+  if active and active.range ~= range then
+    c.capture:delete_marks(active.range)
   end
 
   request_gen = request_gen + 1
@@ -220,6 +273,9 @@ function M.run_with_range(range, prompt_id)
     notify("empty selection", vim.log.levels.WARN)
     return
   end
+  if reject_oversize(range) then
+    return
+  end
   local id = prompt_id or c.catalog:default_id()
   M._start_job(range, id)
 end
@@ -238,6 +294,9 @@ function M.pick_and_run(range)
     notify("empty selection", vim.log.levels.WARN)
     return
   end
+  if reject_oversize(range) then
+    return
+  end
 
   local items = {}
   local default_id = c.catalog:default_id()
@@ -254,22 +313,50 @@ function M.pick_and_run(range)
   for _, p in ipairs(ordered) do
     items[#items + 1] = {
       id = p.id,
-      label = p.label,
+      label = p.label or p.id,
       description = p.description,
     }
   end
+
+  if pending_pick_range and pending_pick_range ~= range then
+    c.capture:delete_marks(pending_pick_range)
+  end
+  pick_gen = pick_gen + 1
+  local gen = pick_gen
+  local job_gen_at_pick = request_gen
+  pending_pick_range = range
 
   c.picker:pick(items, {
     prompt = "laler prompt",
     default_id = default_id,
   }, function(id)
     vim.schedule(function()
-      if id then
-        M._start_job(range, id)
+      if gen ~= pick_gen or request_gen ~= job_gen_at_pick then
+        return
       end
+      pending_pick_range = nil
+      if not id then
+        c.capture:delete_marks(range)
+        return
+      end
+      if c.capture.refresh_from_marks then
+        if not c.capture:refresh_from_marks(range) then
+          notify("selection is gone", vim.log.levels.WARN)
+          c.capture:delete_marks(range)
+          return
+        end
+      end
+      if reject_oversize(range) then
+        return
+      end
+      M._start_job(range, id)
     end)
   end, function()
-    -- picker cancelled: do not start a job
+    if gen ~= pick_gen or request_gen ~= job_gen_at_pick then
+      return
+    end
+    pending_pick_range = nil
+    c.capture:delete_marks(range)
   end)
 end
 
@@ -291,6 +378,30 @@ function M.prompt_ids()
     ids[#ids + 1] = p.id
   end
   return ids
+end
+
+--- Prefix-filter prompt ids for command completion (`arglead`).
+---@param ids string[]
+---@param arglead? string
+---@return string[]
+function M.filter_prompt_ids(ids, arglead)
+  arglead = arglead or ""
+  if arglead == "" then
+    return ids
+  end
+  local out = {}
+  for _, id in ipairs(ids) do
+    if id:sub(1, #arglead) == arglead then
+      out[#out + 1] = id
+    end
+  end
+  return out
+end
+
+---@param arglead? string
+---@return string[]
+function M.complete_prompt_ids(arglead)
+  return M.filter_prompt_ids(M.prompt_ids(), arglead)
 end
 
 return M

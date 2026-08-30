@@ -63,11 +63,11 @@
 ---@field diff_doc laler.DiffDoc
 
 ---@class laler.ReviewCallbacks
----@field on_apply fun(variant: laler.Variant)
+---@field on_apply fun()
 ---@field on_next fun()
 ---@field on_prev fun()
 ---@field on_jump fun(index: integer)
----@field on_yank fun(variant: laler.Variant)
+---@field on_yank fun()
 ---@field on_retry fun()
 ---@field on_cancel fun()
 ---@field on_close fun()
@@ -114,6 +114,8 @@
 ---@field from_visual fun(self: laler.RangeCapture): laler.Range?, string?
 ---@field from_operator fun(self: laler.RangeCapture, mode: string): laler.Range?, string?
 ---@field from_command_range fun(self: laler.RangeCapture, line1: integer, line2: integer): laler.Range?, string?
+---@field delete_marks fun(self: laler.RangeCapture, range: laler.Range?)
+---@field refresh_from_marks fun(self: laler.RangeCapture, range: laler.Range): boolean
 
 ---@class laler.RangeApplier
 ---@field apply fun(self: laler.RangeApplier, range: laler.Range, text: string): boolean, string?

@@ -38,6 +38,24 @@ function M:pick(items, opts, on_choice, on_cancel)
     by_line[line] = it.id
   end
 
+  local done = false
+  local function finish_cancel()
+    if done then
+      return
+    end
+    done = true
+    if on_cancel then
+      on_cancel()
+    end
+  end
+  local function finish_choice(id)
+    if done then
+      return
+    end
+    done = true
+    on_choice(id)
+  end
+
   fzf.fzf_exec(lines, {
     prompt = (opts.prompt or "laler") .. "> ",
     fzf_opts = {
@@ -47,17 +65,26 @@ function M:pick(items, opts, on_choice, on_cancel)
     actions = {
       ["default"] = function(selected)
         if not selected or not selected[1] then
-          if on_cancel then
-            on_cancel()
-          end
+          finish_cancel()
           return
         end
         local id = by_line[selected[1]] or M._id_from_line(selected[1])
         if id then
-          on_choice(id)
-        elseif on_cancel then
-          on_cancel()
+          finish_choice(id)
+        else
+          finish_cancel()
         end
+      end,
+      -- fzf-lua maps abort keys to actions (esc/ctrl-c/ctrl-q); dummy_abort
+      -- is the default — override so session can drop extmarks.
+      ["esc"] = function()
+        finish_cancel()
+      end,
+      ["ctrl-c"] = function()
+        finish_cancel()
+      end,
+      ["ctrl-q"] = function()
+        finish_cancel()
       end,
     },
   })

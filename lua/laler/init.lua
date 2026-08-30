@@ -71,23 +71,25 @@ function M._apply_mappings(mappings)
     return
   end
 
-  if mappings.run then
-    vim.keymap.set("n", mappings.run, function()
+  local run = mappings.run
+  if type(run) == "string" and run ~= "" then
+    vim.keymap.set("n", run, function()
       return M.operator_run()
     end, { desc = "laler: correct (operator)", expr = true })
-    vim.keymap.set("x", mappings.run, function()
+    vim.keymap.set("x", run, function()
       M.run_visual()
     end, { desc = "laler: correct selection" })
-    last_map.run = mappings.run
+    last_map.run = run
   end
-  if mappings.pick then
-    vim.keymap.set("n", mappings.pick, function()
+  local pick = mappings.pick
+  if type(pick) == "string" and pick ~= "" then
+    vim.keymap.set("n", pick, function()
       return M.operator_pick()
     end, { desc = "laler: pick prompt (operator)", expr = true })
-    vim.keymap.set("x", mappings.pick, function()
+    vim.keymap.set("x", pick, function()
       M.pick_visual()
     end, { desc = "laler: pick prompt for selection" })
-    last_map.pick = mappings.pick
+    last_map.pick = pick
   end
 end
 
@@ -147,13 +149,35 @@ function M.operator_callback(mode)
   end
 end
 
+--- Visual `:'<,'>Laler` inserts a line range; if last visual was char-wise
+--- (`v`) and line1/line2 match `'<`/`'>`, capture columns via `from_visual()`.
+--- Linewise `V` (or a range that does not match the marks) stays linewise.
+---@param line1 integer
+---@param line2 integer
+---@return laler.Range?, string?
+function M.range_from_command(line1, line2)
+  local capture = require("laler.range")
+  local vm = vim.fn.visualmode()
+  if vm == "v" or vm == "\22" then
+    local a = vim.fn.getpos("'<")
+    local b = vim.fn.getpos("'>")
+    if a[2] > 0 and b[2] > 0 then
+      local mark1 = math.min(a[2], b[2])
+      local mark2 = math.max(a[2], b[2])
+      if line1 == mark1 and line2 == mark2 then
+        return capture:from_visual()
+      end
+    end
+  end
+  return capture:from_command_range(line1, line2)
+end
+
 ---@param line1 integer
 ---@param line2 integer
 ---@param prompt_id? string
 function M.run_command(line1, line2, prompt_id)
   M.setup_if_needed()
-  local capture = require("laler.range")
-  local range, err = capture:from_command_range(line1, line2)
+  local range, err = M.range_from_command(line1, line2)
   if not range then
     vim.notify("laler: " .. (err or "invalid range"), vim.log.levels.WARN)
     return
@@ -163,8 +187,7 @@ end
 
 function M.pick_command(line1, line2)
   M.setup_if_needed()
-  local capture = require("laler.range")
-  local range, err = capture:from_command_range(line1, line2)
+  local range, err = M.range_from_command(line1, line2)
   if not range then
     vim.notify("laler: " .. (err or "invalid range"), vim.log.levels.WARN)
     return
@@ -182,6 +205,14 @@ function M.setup_if_needed()
   if not M._config then
     M.setup({})
   end
+end
+
+--- Command-line completion for `:Laler` prompt ids (prefix match on `arglead`).
+---@param arglead? string
+---@return string[]
+function M.complete_prompts(arglead)
+  M.setup_if_needed()
+  return session.complete_prompt_ids(arglead)
 end
 
 return M

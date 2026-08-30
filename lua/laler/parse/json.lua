@@ -76,20 +76,27 @@ local function first_delimiter(s)
   return open or close
 end
 
+--- Strip wrapping CR/LF (and blank lines made of them). Keep spaces/tabs.
+---@param text string
+---@return string
+local function strip_wrapping_newlines(text)
+  return (text:gsub("^[\r\n]+", ""):gsub("[\r\n]+$", ""))
+end
+
 ---@param text string
 ---@return string
 local function scrub_variant_text(text)
-  -- Fully wrapped in capture delimiters: keep the inner passage.
-  local wrapped = text:match("^%s*<<<LALER_TEXT[_%w]*>>>%s*(.-)%s*<<<END_LALER_TEXT[_%w]*>>>%s*$")
+  -- Fully wrapped in capture delimiters: keep the inner passage (indent intact).
+  local wrapped = text:match("^[\r\n]*<<<LALER_TEXT[_%w]*>>>[\r\n]*(.-)[\r\n]*<<<END_LALER_TEXT[_%w]*>>>[\r\n]*$")
   if wrapped then
-    return vim.trim(wrapped)
+    return strip_wrapping_newlines(wrapped)
   end
   -- Leakage of prompt delimiters (including suffixed unique markers): cut there.
   local idx = first_delimiter(text)
   if idx then
     text = text:sub(1, idx - 1)
   end
-  return vim.trim(text)
+  return strip_wrapping_newlines(text)
 end
 
 ---@param data table
@@ -172,11 +179,16 @@ function M:parse(stdout)
 
   local i = 1
   local n = #stdout
-  while i <= n do
+  -- Last valid object still wins, but cap `{` candidates so pathological
+  -- `{{{...` on huge output is not O(n²).
+  local candidates = 0
+  local MAX_OBJECT_CANDIDATES = 32
+  while i <= n and candidates < MAX_OBJECT_CANDIDATES do
     local start = stdout:find("{", i, true)
     if not start then
       break
     end
+    candidates = candidates + 1
     local blob, finish = extract_object_at(stdout, start)
     if not blob or not finish then
       i = start + 1

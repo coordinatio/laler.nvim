@@ -33,6 +33,15 @@ function M:pick(items, opts, on_choice, on_cancel)
       }),
       sorter = conf.generic_sorter({}),
       attach_mappings = function(prompt_bufnr, _)
+        local function fire_cancel()
+          if chosen then
+            return
+          end
+          chosen = true
+          if on_cancel then
+            on_cancel()
+          end
+        end
         local function select()
           if chosen then
             return
@@ -49,6 +58,12 @@ function M:pick(items, opts, on_choice, on_cancel)
           end
         end
         actions.select_default:replace(select)
+        -- Esc / close without a choice: on_cancel once (`chosen` guards select).
+        pcall(function()
+          actions.close:enhance({
+            post = fire_cancel,
+          })
+        end)
         return true
       end,
     })

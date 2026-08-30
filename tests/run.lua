@@ -188,6 +188,7 @@ do
   assert_true(vim.tbl_contains(spec.args, "--no-tools"), "no-tools")
   assert_true(vim.tbl_contains(spec.args, "--no-context-files"), "no-context-files")
   assert_true(vim.tbl_contains(spec.args, "--no-extensions"), "no-extensions")
+  assert_true(vim.tbl_contains(spec.args, "--no-skills"), "no-skills")
   assert_eq(spec.stdin, "hello", "stdin")
 
   local custom = llm.resolve({
@@ -455,7 +456,9 @@ do
   assert_true(not args_joined:find("SECRET_PROMPT", 1, true), "cursor args have no prompt")
   assert_true(vim.tbl_contains(spec.args, "-p"), "cursor -p")
   assert_true(vim.tbl_contains(spec.args, "--mode"), "cursor --mode")
-  assert_true(not vim.tbl_contains(spec.args, "--trust"), "cursor no --trust")
+  assert_true(vim.tbl_contains(spec.args, "--trust"), "cursor --trust")
+  assert_true(not vim.tbl_contains(spec.args, "--force"), "cursor no --force")
+  assert_true(not vim.tbl_contains(spec.args, "--yolo"), "cursor no --yolo")
 
   local oc = require("laler.llm.opencode")
   local ospec = oc:request("SECRET_PROMPT")
@@ -463,6 +466,17 @@ do
   assert_true(not table.concat(ospec.args, "\0"):find("SECRET_PROMPT", 1, true), "opencode args have no prompt")
   assert_eq(ospec.args[1], "run", "opencode run")
   assert_true(vim.tbl_contains(ospec.args, "--format"), "opencode --format")
+  assert_true(vim.tbl_contains(ospec.args, "--pure"), "opencode --pure")
+  assert_true(vim.tbl_contains(ospec.args, "--permissions"), "opencode --permissions")
+  local perm_i
+  for i, a in ipairs(ospec.args) do
+    if a == "--permissions" then
+      perm_i = i
+      break
+    end
+  end
+  assert_true(perm_i ~= nil, "opencode --permissions index")
+  assert_eq(ospec.args[perm_i + 1], "", "opencode empty permissions allowlist")
   assert_true(ospec.env and ospec.env.OPENCODE_PERMISSION ~= nil, "opencode permission env")
   assert_true(ospec.env.OPENCODE_PERMISSION:find("deny", 1, true) ~= nil, "opencode deny")
 end
@@ -939,6 +953,323 @@ do
       view:close()
     end)
   end
+end
+
+-- preserve variant indent / padding (do not vim.trim passages)
+do
+  local parser = require("laler.parse.json")
+  local ok, variants = parser:parse('{"variants":[{"text":"    Hello world"}]}')
+  assert_true(ok, "parses indented variant")
+  assert_eq(variants[1].text, "    Hello world", "preserves leading indent")
+
+  ok, variants = parser:parse('{"variants":[{"text":"  hi  "}]}')
+  assert_true(ok, "parses padded variant")
+  assert_eq(variants[1].text, "  hi  ", "preserves leading and trailing spaces")
+
+  ok, variants = parser:parse('{"variants":[{"text":"\\n    Hello world\\n"}]}')
+  assert_true(ok, "parses newline-wrapped indented variant")
+  assert_eq(variants[1].text, "    Hello world", "strips wrapping newlines only")
+end
+
+-- completion prefix filter
+do
+  local session = require("laler.session")
+  local ids = { "correct", "concise", "formal", "casual" }
+  local all = session.filter_prompt_ids(ids, "")
+  assert_eq(#all, 4, "empty prefix keeps all")
+  local co = session.filter_prompt_ids(ids, "co")
+  assert_eq(#co, 2, "co matches two")
+  assert_true(vim.tbl_contains(co, "correct"), "co matches correct")
+  assert_true(vim.tbl_contains(co, "concise"), "co matches concise")
+  assert_true(not vim.tbl_contains(co, "formal"), "co does not match formal")
+  local none = session.filter_prompt_ids(ids, "zzz")
+  assert_eq(#none, 0, "no match is empty")
+
+  local laler = require("laler")
+  laler.setup({})
+  local filtered = laler.complete_prompts("for")
+  assert_true(vim.tbl_contains(filtered, "formal"), "complete_prompts formal")
+  assert_true(not vim.tbl_contains(filtered, "correct"), "complete_prompts prefix")
+end
+
+-- missing prompt label defaults to id
+do
+  local catalog = require("laler.prompt.catalog").new({
+    prompts = { { id = "x", template = "t {{text}}" } },
+  })
+  local p = catalog:get("x")
+  assert_true(p ~= nil, "prompt x exists")
+  assert_eq(p.label, "x", "label defaults to id")
+  local line = require("laler.picker.fzf_lua")._item_line({ id = p.id, label = p.label })
+  assert_true(line:find("x", 1, true) ~= nil, "picker line uses id label")
+end
+
+-- catalog duplicate ids
+do
+  local catalog = require("laler.prompt.catalog")
+  local ok, err = pcall(function()
+    catalog.new({
+      prompts = {
+        { id = "a", template = "t {{text}}" },
+        { id = "a", template = "u {{text}}" },
+      },
+    })
+  end)
+  assert_true(not ok, "duplicate prompt id errors")
+  assert_true(tostring(err):find("duplicate", 1, true) ~= nil, "duplicate id message")
+  assert_true(tostring(err):find("laler:", 1, true) ~= nil, "duplicate id laler: prefix")
+end
+
+-- oversize range rejected
+do
+  local session = require("laler.session")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  assert_true(session._too_large(string.rep("x", session.MAX_RANGE_BYTES + 1)), "cap helper")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  local old_notify = vim.notify
+  local msgs = {}
+  vim.notify = function(m)
+    msgs[#msgs + 1] = m
+  end
+  session.run_with_range({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = string.rep("x", session.MAX_RANGE_BYTES + 1),
+  })
+  vim.notify = old_notify
+  assert_eq(#jobs.cbs, 0, "oversize does not start job")
+  assert_true(#msgs > 0 and tostring(msgs[#msgs]):find("too large", 1, true) ~= nil, "oversize notify")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- Hiragana / Katakana / Hangul group; Han stays per-char
+do
+  local diff = require("laler.diff.vim_diff")
+  local hira = diff._tokenize("ひらがな")
+  assert_eq(#hira, 1, "hiragana groups into a word")
+  local kata = diff._tokenize("カタカナ")
+  assert_eq(#kata, 1, "katakana groups into a word")
+  local hang = diff._tokenize("한글")
+  assert_eq(#hang, 1, "hangul groups into a word")
+  local zh = diff._tokenize("汉字词")
+  assert_true(#zh >= 3, "each CJK ideograph is a token")
+end
+
+-- :'<,'>Laler from char visual is char-wise
+do
+  local laler = require("laler")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz", "second" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.cmd("normal! 0fbv2l")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  assert_eq(vim.fn.visualmode(), "v", "last visual is char")
+  local range, err = laler.range_from_command(1, 1)
+  assert_true(range ~= nil, "char visual command range " .. tostring(err))
+  assert_eq(range.mode, "char", "char visual stays char-wise")
+  assert_eq(range.text, "bar", "char visual captures substring not whole line")
+
+  local session = require("laler.session")
+  laler.setup({})
+  local got
+  local orig_run = session.run_with_range
+  session.run_with_range = function(r)
+    got = r
+  end
+  laler.run_command(1, 1)
+  session.run_with_range = orig_run
+  assert_true(got ~= nil, "run_command captured")
+  assert_eq(got.text, "bar", "run_command char visual text")
+  assert_eq(got.mode, "char", "run_command char visual mode")
+
+  local linewise, lerr = laler.range_from_command(2, 2)
+  assert_true(linewise ~= nil, "mismatched lines linewise " .. tostring(lerr))
+  assert_eq(linewise.mode, "line", "non-matching lines stay linewise")
+  assert_eq(linewise.text, "second", "line 2 text")
+
+  vim.cmd("normal! V")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  local vline, verr = laler.range_from_command(1, 1)
+  assert_true(vline ~= nil, "linewise visual command " .. tostring(verr))
+  assert_eq(vline.mode, "line", "V stays linewise")
+  assert_eq(vline.text, "foo bar baz", "V captures whole line")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- empty mapping lhs is unset; generic adapter error prefix
+do
+  local laler = require("laler")
+  local ok_map = pcall(function()
+    laler._apply_mappings({ run = "", pick = "" })
+  end)
+  assert_true(ok_map, "empty mapping lhs does not error")
+  assert_eq(vim.fn.maparg("", "n"), "", "empty lhs not mapped")
+
+  local ok, err = pcall(function()
+    require("laler.llm.generic").new({})
+  end)
+  assert_true(not ok, "generic requires cmd or build")
+  assert_true(tostring(err):find("laler:", 1, true) ~= nil, "generic error laler: prefix")
+end
+
+-- wait(0) is not used to probe cancel; nvim version guard in plugin
+do
+  local job_src = table.concat(vim.fn.readfile(root .. "/lua/laler/job/vim_system.lua"), "\n")
+  assert_true(not job_src:find(":wait(0)", 1, true), "job cancel does not wait(0)")
+  assert_true(job_src:find("is_closing", 1, true) ~= nil, "job cancel uses is_closing")
+  local plugin_src = table.concat(vim.fn.readfile(root .. "/plugin/laler.lua"), "\n")
+  assert_true(plugin_src:find("nvim%-0%.10", 1) ~= nil, "plugin has nvim-0.10 guard")
+end
+
+-- picker cancel deletes marks; confirm refreshes; stale on_choice ignored
+do
+  local session = require("laler.session")
+  local capture = require("laler.range")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  local pick_choice, pick_cancel
+  local composed_text
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = {
+      compose = function(_, _, ctx)
+        composed_text = ctx.text
+        return "prompt"
+      end,
+    },
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = {
+      pick = function(_, _, _, on_choice, on_cancel)
+        pick_choice = on_choice
+        pick_cancel = on_cancel
+      end,
+    },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = capture,
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "foo bar baz" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  local range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for picker cancel " .. tostring(err))
+  local mark = range.start_mark
+  session.pick_and_run(range)
+  assert_true(pick_cancel ~= nil, "picker on_cancel captured")
+  pick_cancel()
+  assert_eq(range.start_mark, nil, "picker cancel deletes marks")
+  if mark then
+    local leftover = vim.api.nvim_buf_get_extmark_by_id(buf, vim.api.nvim_create_namespace("laler_range"), mark, {})
+    assert_true(not leftover or #leftover == 0, "extmark removed on cancel")
+  end
+
+  vim.api.nvim_buf_set_mark(buf, "[", 1, 4, {})
+  vim.api.nvim_buf_set_mark(buf, "]", 1, 6, {})
+  range, err = capture:from_operator("char")
+  assert_true(range ~= nil, "capture for picker confirm " .. tostring(err))
+  assert_eq(range.text, "bar", "captured bar before edit")
+  vim.api.nvim_buf_set_text(buf, range.start_row, range.start_col, range.end_row, range.end_col, { "BAR" })
+  composed_text = nil
+  session.pick_and_run(range)
+  pick_choice("correct")
+  vim.wait(200, function()
+    return composed_text ~= nil
+  end)
+  assert_eq(composed_text, "BAR", "on_choice refreshes from marks")
+
+  -- stale on_choice after a newer job
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "alpha", "beta" })
+  local r1 = capture:from_command_range(1, 1)
+  local r2 = capture:from_command_range(2, 2)
+  composed_text = nil
+  session.pick_and_run(r1)
+  local stale_choice = pick_choice
+  local cbs_before = #jobs.cbs
+  session._start_job(r2, "correct")
+  assert_eq(#jobs.cbs, cbs_before + 1, "new job started")
+  stale_choice("correct")
+  vim.wait(50)
+  assert_eq(#jobs.cbs, cbs_before + 1, "stale picker on_choice ignored")
+
+  -- replacing active deletes marks on a different range
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two" })
+  local a = capture:from_command_range(1, 1)
+  local b = capture:from_command_range(2, 2)
+  assert_true(a.start_mark ~= nil, "range a has mark")
+  session._start_job(a, "correct")
+  session._start_job(b, "correct")
+  assert_eq(a.start_mark, nil, "previous range marks deleted")
+  assert_true(b.start_mark ~= nil, "current range keeps marks")
+
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 print(string.format("laler tests: %d passed, %d failed", passed, failed))
