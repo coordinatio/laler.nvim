@@ -73,7 +73,9 @@ local function open_win(buf)
     title_pos = "center",
     zindex = 50,
   })
-  vim.wo[win].wrap = false
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].breakindent = true
   vim.wo[win].cursorline = true
   state.win = win
   return win
