@@ -25,6 +25,7 @@ Hard rules:
 - Do not change meaning. Preserve markdown and code fences inside the passage.
 - Language focus: {{language}}. Provide exactly {{n_variants}} variants when possible.
 - Each notes entry teaches why a change improves the language.
+- Valid JSON: one of each key per variant. Put every note in that single "notes" array.
 ]]
 
 local VARIANT_SPECS = {

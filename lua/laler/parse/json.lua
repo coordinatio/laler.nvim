@@ -180,14 +180,81 @@ local function normalize(data)
   return out
 end
 
+--- Join repeated "notes" keys into one array: `"notes":["a"],"notes":["b"]` → `"notes":["a","b"]`.
+---@param s string
+---@return string
+local function merge_duplicate_notes(s)
+  local prev
+  local n = 0
+  while s ~= prev and n < 16 do
+    prev = s
+    n = n + 1
+    s = s:gsub('([^%[%]])%]%s*,%s*"notes"%s*:%s*%[', "%1,", 1)
+  end
+  return s
+end
+
+--- Decode JSON, repairing two common model mistakes:
+--- duplicate "notes" keys, and an extra `}` after a variant (T_OBJ_END).
+---@param blob string
+---@return table?, string?
+local function decode_json(blob)
+  local current = merge_duplicate_notes(blob)
+  local last_err
+  for _ = 1, 8 do
+    local ok, data = pcall(vim.json.decode, current)
+    if ok then
+      return data
+    end
+    last_err = data
+    local pos = tonumber(tostring(data):match("T_OBJ_END at character (%d+)"))
+    if not pos or pos < 1 or pos > #current or current:sub(pos, pos) ~= "}" then
+      break
+    end
+    current = current:sub(1, pos - 1) .. current:sub(pos + 1)
+  end
+  return nil, "JSON decode failed: " .. tostring(last_err)
+end
+
 ---@param blob string
 ---@return laler.Variant[]?, string?
 local function decode_and_normalize(blob)
-  local ok, data = pcall(vim.json.decode, blob)
-  if not ok then
-    return nil, "JSON decode failed: " .. tostring(data)
+  local data, err = decode_json(blob)
+  if not data then
+    return nil, err
   end
   return normalize(data)
+end
+
+--- Collect variant objects even when the wrapping `{"variants":[...]}` is broken.
+---@param s string
+---@return laler.Variant[]?
+local function salvage_variants(s)
+  local wrapped = { variants = {} }
+  local seen = {}
+  local search_at = 1
+  while true do
+    local found = s:find('"text"%s*:', search_at)
+    if not found then
+      break
+    end
+    search_at = found + 1
+    local start = enclosing_object_start(s, found)
+    if start and not seen[start] then
+      seen[start] = true
+      local blob = extract_object_at(s, start)
+      if blob then
+        local data = decode_json(blob)
+        if type(data) == "table" and type(data.variants) ~= "table" and type(data.text) == "string" then
+          wrapped.variants[#wrapped.variants + 1] = data
+        end
+      end
+    end
+  end
+  if #wrapped.variants == 0 then
+    return nil
+  end
+  return normalize(wrapped)
 end
 
 ---@param stdout string
@@ -246,6 +313,18 @@ function M:parse(stdout)
   if last then
     return true, last
   end
+
+  -- extract_object_at stops at an extra `}` so the full payload may still
+  -- decode after repair, or as loose variant objects after the cut.
+  local variants = decode_and_normalize(stdout)
+  if variants then
+    return true, variants
+  end
+  variants = salvage_variants(stdout)
+  if variants then
+    return true, variants
+  end
+
   return false, last_err
 end
 

@@ -732,6 +732,51 @@ do
   assert_eq(variants[1].text, "good", "kept non-empty variant")
 end
 
+-- repair extra `}` / duplicate notes from model JSON
+do
+  local parser = require("laler.parse.json")
+  local raw = [[{"variants":[{"label":"conservative","text":"Please set the original GPL v3 as the project's license.","notes":["The sentence is grammatically correct. 'Set...as' is acceptable, though less idiomatic than 'use' or 'adopt' in this context. No changes needed."]},{"label":"native","text":"Please use the original GPL v3 as the project's license.","notes":["'Use' is the most natural verb when talking about applying a license to a project. 'Set' feels more like configuring a setting in software, not choosing a legal license."],"notes":["In software licensing discussions, 'adopt' is a common collocation that sounds slightly more formal and intentional than 'use.' It implies a deliberate decision."]}},{"label":"alternative","text":"Please assign GPL v3 as the project's license.","notes":["'Assign' is widely used in open-source contexts when designating a license for a repository. Dropping 'the original' is natural since GPL v3 already implies the standard version unless stated otherwise."]}]}]]
+  local ok, variants = parser:parse(raw)
+  assert_true(ok, "repairs extra brace plus duplicate notes")
+  assert_eq(#variants, 3, "three variants after repair")
+  assert_eq(variants[1].label, "conservative", "conservative label")
+  assert_eq(variants[2].label, "native", "native label")
+  assert_eq(variants[3].label, "alternative", "alternative label")
+  assert_eq(variants[2].text, "Please use the original GPL v3 as the project's license.", "native text")
+  assert_eq(#variants[2].notes, 2, "merged duplicate notes keys")
+  assert_true(variants[2].notes[1]:find("Use", 1, true) ~= nil, "kept first notes")
+  assert_true(variants[2].notes[2]:find("adopt", 1, true) ~= nil, "kept second notes")
+
+  ok, variants = parser:parse(
+    '{"variants":[{"label":"a","text":"one"},{"label":"b","text":"two"}},{"label":"c","text":"three"}]}'
+  )
+  assert_true(ok, "repairs extra brace between variants")
+  assert_eq(#variants, 3, "three variants after extra brace")
+  assert_eq(variants[3].text, "three", "recovered trailing variant")
+
+  ok, variants = parser:parse('{"variants":[{"text":"hi","notes":["a"],"notes":["b"]}]}')
+  assert_true(ok, "merges duplicate notes on valid JSON")
+  assert_eq(#variants[1].notes, 2, "both notes kept")
+  assert_eq(variants[1].notes[1], "a", "first note")
+  assert_eq(variants[1].notes[2], "b", "second note")
+
+  ok, variants = parser:parse('{"label":"a","text":"one"}{"label":"b","text":"two"}')
+  assert_true(ok, "salvages concatenated variant objects")
+  assert_eq(#variants, 2, "two salvaged variants")
+  assert_eq(variants[1].text, "one", "first salvaged text")
+  assert_eq(variants[2].text, "two", "second salvaged text")
+
+  ok, variants = parser:parse('{"variants":[{"text":"x","extra":{"n":[1]}},{"text":"y"}]}')
+  assert_true(ok, "valid nested ]}},{ is unchanged")
+  assert_eq(#variants, 2, "two variants with nested object")
+  assert_eq(variants[1].text, "x", "nested extra kept wrapper")
+  assert_eq(variants[2].text, "y", "second after nested extra")
+
+  ok, variants = parser:parse('{"variants":[{"text":"foo ]}},{ bar"}]}')
+  assert_true(ok, "does not rewrite ]}},{ inside text")
+  assert_eq(variants[1].text, "foo ]}},{ bar", "keeps brace sequence in passage")
+end
+
 -- combining marks / ZWJ exclusive end
 do
   local capture = require("laler.range")
