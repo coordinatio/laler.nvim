@@ -423,6 +423,16 @@ do
   ok, variants = parser:parse(dummy .. '{"variants":[{"text":"real"}]}')
   assert_true(ok, "parses after many dummy braces")
   assert_eq(variants[1].text, "real", "finds variants after many braces")
+
+  local braces_in_text = string.rep("{", 300)
+  ok, variants = parser:parse('{"variants":[{"text":"' .. braces_in_text .. '"}]}')
+  assert_true(ok, "parses variant text with 300 braces")
+  assert_eq(variants[1].text, braces_in_text, "keeps 300 braces in text")
+
+  local trailing = string.rep("{x}", 300)
+  ok, variants = parser:parse('{"variants":[{"text":"keep"}]}' .. trailing)
+  assert_true(ok, "parses variants before 300 dummy braces")
+  assert_eq(variants[1].text, "keep", "ignores trailing dummy braces")
 end
 
 -- composer delimiter collision

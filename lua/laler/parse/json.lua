@@ -65,6 +65,44 @@ local function extract_object_at(s, start)
   return s:sub(start, finish), finish
 end
 
+--- Walk left from `pos` to the `{` that opens the enclosing object. Skips strings.
+---@param s string
+---@param pos integer
+---@return integer?
+local function enclosing_object_start(s, pos)
+  local i = pos - 1
+  local depth = 0
+  while i >= 1 do
+    local ch = s:sub(i, i)
+    if ch == '"' then
+      i = i - 1
+      while i >= 1 do
+        if s:sub(i, i) == '"' then
+          local bs = 0
+          local j = i - 1
+          while j >= 1 and s:sub(j, j) == "\\" do
+            bs = bs + 1
+            j = j - 1
+          end
+          if bs % 2 == 0 then
+            break
+          end
+        end
+        i = i - 1
+      end
+    elseif ch == "}" then
+      depth = depth + 1
+    elseif ch == "{" then
+      if depth == 0 then
+        return i
+      end
+      depth = depth - 1
+    end
+    i = i - 1
+  end
+  return nil
+end
+
 --- Strip at most one leading/trailing `\n` or `\r\n`. Keep blank lines in the passage.
 ---@param text string
 ---@return string
@@ -156,7 +194,8 @@ end
 ---@return boolean, laler.Variant[]|string
 function M:parse(stdout)
   local last = nil
-  local last_err = "could not find JSON object in model output"
+  local find_err = "could not find JSON object in model output"
+  local last_err = find_err
 
   local fenced = extract_fenced(stdout)
   if fenced then
@@ -167,30 +206,39 @@ function M:parse(stdout)
     last_err = err or last_err
   end
 
-  -- Prefer the last successful `variants` object among unfenced `{`
-  -- candidates. Search backwards from the last `{` so thinking-text
-  -- braces do not hide the real payload. Cap candidates; pathological
-  -- `{{{` is also bounded by string length.
-  local n = #stdout
-  local MAX_OBJECT_CANDIDATES = 256
-  local starts = {}
-  for i = n, 1, -1 do
-    if stdout:byte(i) == 123 then
-      starts[#starts + 1] = i
-      if #starts >= MAX_OBJECT_CANDIDATES then
-        break
-      end
+  -- Prefer the last successful `variants` object. Find `"variants"` keys
+  -- and walk back to the enclosing `{` so braces in text or trailing `{x}`
+  -- cannot hide the root object.
+  local needle = '"variants"'
+  local key_starts = {}
+  local search_at = 1
+  while true do
+    local found = stdout:find(needle, search_at, true)
+    if not found then
+      break
     end
+    key_starts[#key_starts + 1] = found
+    search_at = found + 1
   end
-  for _, start in ipairs(starts) do
-    local blob = extract_object_at(stdout, start)
-    if blob then
-      local variants, err = decode_and_normalize(blob)
-      if variants then
-        last = variants
-        break
-      elseif err then
-        last_err = err
+  for k = #key_starts, 1, -1 do
+    local start = enclosing_object_start(stdout, key_starts[k])
+    if start then
+      local blob = extract_object_at(stdout, start)
+      if blob then
+        local variants, err = decode_and_normalize(blob)
+        if variants then
+          last = variants
+          break
+        elseif err then
+          -- Do not let inner `{x}` decode failures replace a useful
+          -- normalize error from a variants object.
+          local is_decode = err:find("JSON decode failed", 1, true) ~= nil
+          local have_useful = last_err ~= find_err
+            and last_err:find("JSON decode failed", 1, true) == nil
+          if not (is_decode and have_useful) then
+            last_err = err
+          end
+        end
       end
     end
   end
