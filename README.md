@@ -117,4 +117,4 @@ nvim --headless -u NONE -c "luafile tests/run.lua"
 
 ## License
 
-MIT
+[GPL-3.0](LICENSE)
