@@ -9,6 +9,7 @@
 ---@field end_row integer 0-indexed
 ---@field end_col integer 0-indexed byte (exclusive for char mode)
 ---@field text string
+---@field cwd? string working directory at capture (`getcwd()`); reused on retry
 ---@field start_mark? integer extmark id at range start (right_gravity = false)
 ---@field end_mark? integer extmark id at exclusive end (right_gravity = false)
 

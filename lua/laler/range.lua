@@ -192,6 +192,7 @@ local function make_range(bufnr, mode, start_row, start_col, end_row, end_col)
     end_row = end_row,
     end_col = end_col,
     text = text,
+    cwd = vim.fn.getcwd(),
   }
 
   local mark_end_row, mark_end_col = end_row, end_col
@@ -338,6 +339,7 @@ function M:from_visual()
 
     if visual_mode == "\22" then
       -- Same policy as :'<,'>Laler: blockwise falls back to linewise rows.
+      vim.notify("laler: blockwise selection expanded to lines", vim.log.levels.INFO)
       return make_range(bufnr, "line", start_row, 0, end_row, 0)
     end
 

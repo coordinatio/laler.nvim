@@ -361,6 +361,7 @@ do
   local bad, berr = capture:from_command_range(0, 2)
   assert_true(bad == nil, "line1 < 1 invalid")
   assert_true(type(berr) == "string", "invalid range err")
+  assert_true(type(range.cwd) == "string" and range.cwd ~= "", "range.cwd is a non-empty string")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
@@ -534,6 +535,30 @@ do
   clear, deliver = job._resolve_exit(1, 2, nil)
   assert_true(not clear, "cancelled job does not clear")
   assert_true(not deliver, "cancelled job does not deliver")
+end
+
+-- huge stderr does not fail a successful stdout; huge stdout does
+do
+  local job = require("laler.job.vim_system")
+  local old_max = job.MAX_OUTPUT_BYTES
+  job.MAX_OUTPUT_BYTES = 32
+  local ok, out, err = job._finalize_output(0, 0, '{"ok":true}', string.rep("e", 100))
+  assert_true(ok, "huge stderr does not fail zero-exit")
+  assert_eq(out, '{"ok":true}', "stdout kept when only stderr is huge")
+  assert_eq(#err, 32, "huge stderr truncated to cap")
+  ok, out, err = job._finalize_output(0, 0, string.rep("x", 100), "log")
+  assert_true(not ok, "huge stdout fails even with exit 0")
+  assert_eq(#out, 32, "huge stdout truncated to cap")
+  assert_eq(err, "output too large", "stdout over cap message")
+  ok, out, err = job._finalize_output(1, 0, "small", string.rep("e", 100))
+  assert_true(not ok, "nonzero exit still fails")
+  assert_eq(out, "small", "stdout kept on failed exit")
+  assert_eq(#err, 32, "stderr truncated on failed exit")
+  ok, out, err = job._finalize_output(0, 0, "small", "log")
+  assert_true(ok, "small streams succeed")
+  assert_eq(out, "small", "small stdout")
+  assert_eq(err, "log", "small stderr")
+  job.MAX_OUTPUT_BYTES = old_max
 end
 
 -- session ignores stale job callbacks
@@ -766,11 +791,19 @@ do
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcde", "fghij" })
+  local old_notify = vim.notify
+  local msgs = {}
+  vim.notify = function(m)
+    msgs[#msgs + 1] = m
+  end
   vim.cmd("normal! gg0" .. vim.api.nvim_replace_termcodes("<C-v>j2l", true, false, true))
   range, err = capture:from_visual()
+  vim.notify = old_notify
   assert_true(range ~= nil, "from_visual blockwise " .. tostring(err))
   assert_eq(range.mode, "line", "blockwise visual is linewise")
   assert_eq(range.text, "abcde\nfghij", "blockwise visual uses line range")
+  assert_true(#msgs > 0, "blockwise fallback notifies")
+  assert_true(tostring(msgs[#msgs]):find("blockwise", 1, true) ~= nil, "blockwise notify mentions blockwise")
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   vim.api.nvim_buf_delete(buf, { force = true })
 end
@@ -1145,6 +1178,140 @@ do
   vim.notify = old_notify
   assert_eq(#jobs.cbs, 0, "oversize does not start job")
   assert_true(#msgs > 0 and tostring(msgs[#msgs]):find("too large", 1, true) ~= nil, "oversize notify")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- refuse nomodifiable / readonly before starting the job
+do
+  local session = require("laler.session")
+  local start_n = 0
+  local jobs = {}
+  function jobs:start()
+    start_n = start_n + 1
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.bo[buf].modifiable = false
+  local range, err = require("laler.range"):from_command_range(1, 1)
+  assert_true(range ~= nil, "capture nomodifiable " .. tostring(err))
+  local mark = range.start_mark
+  local old_notify = vim.notify
+  local msgs = {}
+  vim.notify = function(m)
+    msgs[#msgs + 1] = m
+  end
+  session.run_with_range(range)
+  vim.notify = old_notify
+  assert_eq(start_n, 0, "nomodifiable does not start job")
+  assert_true(#msgs > 0 and tostring(msgs[#msgs]):find("not modifiable", 1, true) ~= nil, "nomodifiable notify")
+  assert_eq(range.start_mark, nil, "nomodifiable deletes marks")
+  if mark then
+    local leftover = vim.api.nvim_buf_get_extmark_by_id(buf, vim.api.nvim_create_namespace("laler_range"), mark, {})
+    assert_true(not leftover or #leftover == 0, "nomodifiable removes extmark")
+  end
+
+  vim.bo[buf].modifiable = true
+  vim.bo[buf].readonly = true
+  range, err = require("laler.range"):from_command_range(1, 1)
+  assert_true(range ~= nil, "capture readonly " .. tostring(err))
+  start_n = 0
+  msgs = {}
+  vim.notify = function(m)
+    msgs[#msgs + 1] = m
+  end
+  session.run_with_range(range)
+  vim.notify = old_notify
+  assert_eq(start_n, 0, "readonly does not start job")
+  assert_true(#msgs > 0 and tostring(msgs[#msgs]):find("not modifiable", 1, true) ~= nil, "readonly notify")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- session uses range.cwd for the job spec (retry after float :lcd)
+do
+  local session = require("laler.session")
+  local specs = {}
+  local jobs = {}
+  function jobs:start(spec)
+    specs[#specs + 1] = spec
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  session._start_job({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+    cwd = "/captured/cwd",
+  }, "correct")
+  assert_eq(#specs, 1, "job started with range.cwd")
+  assert_eq(specs[1].cwd, "/captured/cwd", "job spec uses range.cwd")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 

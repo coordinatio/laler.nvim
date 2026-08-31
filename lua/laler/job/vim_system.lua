@@ -50,6 +50,32 @@ local function job_success(obj)
   return code == 0 and signal == 0
 end
 
+--- Apply exit code and the output-size policy.
+--- Huge **stdout** fails the job (`output too large`). Huge **stderr** is
+--- truncated for error/log snippets and does not flip a successful exit.
+---@param code integer
+---@param signal integer
+---@param stdout string
+---@param stderr string
+---@return boolean success
+---@return string stdout
+---@return string stderr
+local function finalize_output(code, signal, stdout, stderr)
+  stdout = stdout or ""
+  stderr = stderr or ""
+  local success = job_success({ code = code, signal = signal })
+  if #stdout > M.MAX_OUTPUT_BYTES then
+    return false, stdout:sub(1, M.MAX_OUTPUT_BYTES), "output too large"
+  end
+  if #stderr > M.MAX_OUTPUT_BYTES then
+    stderr = stderr:sub(1, M.MAX_OUTPUT_BYTES)
+  end
+  return success, stdout, stderr
+end
+
+--- Test helper: success + capped streams without vim.system.
+M._finalize_output = finalize_output
+
 ---@param obj vim.SystemObj
 ---@return boolean
 local function is_closing(obj)
@@ -111,12 +137,8 @@ function M:start(spec, callbacks, opts)
     local stderr = obj.stderr or ""
     local code = obj.code or -1
     local signal = obj.signal or 0
-    local success = job_success(obj)
-    if #stdout > M.MAX_OUTPUT_BYTES or #stderr > M.MAX_OUTPUT_BYTES then
-      stdout = stdout:sub(1, M.MAX_OUTPUT_BYTES)
-      success = false
-      stderr = "output too large"
-    end
+    local success
+    success, stdout, stderr = finalize_output(code, signal, stdout, stderr)
     vim.schedule(function()
       local _, still = resolve_exit(gen, seq, active and active.gen or nil)
       if not still then

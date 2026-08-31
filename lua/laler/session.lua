@@ -103,6 +103,24 @@ local function reject_empty(range)
   return true
 end
 
+---@param range laler.Range
+---@return boolean rejected
+local function reject_unwritable(range)
+  if not range or type(range.bufnr) ~= "number" then
+    return false
+  end
+  if not vim.api.nvim_buf_is_valid(range.bufnr) then
+    return false
+  end
+  local bo = vim.bo[range.bufnr]
+  if bo.modifiable and not bo.readonly then
+    return false
+  end
+  notify("buffer is not modifiable", vim.log.levels.WARN)
+  require_ctx().capture:delete_marks(range)
+  return true
+end
+
 --- Drop a pending picker so a stale `on_choice` is ignored (`gen ~= pick_gen`).
 local function invalidate_pick()
   pick_gen = pick_gen + 1
@@ -242,6 +260,9 @@ end
 ---@param prompt_id string
 function M._start_job(range, prompt_id)
   local c = require_ctx()
+  if reject_unwritable(range) then
+    return
+  end
   local prompt = c.catalog:get(prompt_id)
   if not prompt then
     notify("unknown prompt '" .. prompt_id .. "'", vim.log.levels.ERROR)
@@ -290,8 +311,8 @@ function M._start_job(range, prompt_id)
     return
   end
 
-  -- Capture cwd before the float steals the window (window-local :lcd).
-  local cwd = vim.fn.getcwd()
+  -- range.cwd is from capture; last-resort getcwd() is before the float (:lcd).
+  local cwd = range.cwd or vim.fn.getcwd()
   local callbacks = make_callbacks()
   c.view:open_loading({ prompt_id = prompt_id, adapter_name = c.llm.name }, callbacks)
 
@@ -306,9 +327,7 @@ function M._start_job(range, prompt_id)
     c.view:show_error("invalid command", nil, make_callbacks())
     return
   end
-  if spec.cwd == nil then
-    spec.cwd = cwd
-  end
+  spec.cwd = spec.cwd or cwd
 
   local ok_start, start_err = pcall(function()
     c.jobs:start(spec, {
@@ -365,6 +384,9 @@ function M.run_with_range(range, prompt_id)
     return
   end
   if reject_oversize(range) then
+    return
+  end
+  if reject_unwritable(range) then
     return
   end
   local id = prompt_id or c.catalog:default_id()
