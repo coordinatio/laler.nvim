@@ -1,6 +1,8 @@
+local argv = require("laler.llm.argv")
+
 local M = {}
 
----@param opts { name?: string, cmd: string|string[], args?: string[], env?: table<string,string>, cwd?: string, build?: fun(composed: string): laler.JobSpec }
+---@param opts { name?: string, cmd: string|string[], args?: string[], env?: table<string,string>, cwd?: string, model?: string, thinking?: boolean, build?: fun(composed: string): laler.JobSpec }
 ---@return laler.LlmClient
 function M.new(opts)
   if not opts or not (opts.cmd or opts.build) then
@@ -32,6 +34,8 @@ function M.new(opts)
     if type(cmd) ~= "string" or cmd == "" then
       error("laler: generic adapter requires a non-empty cmd")
     end
+    argv.with_thinking(args, opts.thinking)
+    argv.with_model(args, opts.model)
 
     return {
       cmd = cmd,

@@ -211,7 +211,15 @@ do
   assert_true(vim.tbl_contains(spec.args, "--no-context-files"), "no-context-files")
   assert_true(vim.tbl_contains(spec.args, "--no-extensions"), "no-extensions")
   assert_true(vim.tbl_contains(spec.args, "--no-skills"), "no-skills")
+  assert_true(not vim.tbl_contains(spec.args, "--model"), "pi default has no --model")
+  assert_true(not vim.tbl_contains(spec.args, "--thinking"), "pi default has no --thinking")
   assert_eq(spec.stdin, "hello", "stdin")
+
+  local named = llm.resolve({ name = "pi" })
+  assert_eq(named.name, "pi", "named builtin without cmd")
+  local nspec = named:request("hello")
+  assert_true(vim.tbl_contains(nspec.args, "--no-skills"), "named builtin keeps pi flags")
+  assert_true(not vim.tbl_contains(nspec.args, "--model"), "named builtin default has no --model")
 
   local custom = llm.resolve({
     name = "echo",
@@ -229,6 +237,11 @@ do
   local cfg = config.merge({ language = "ru", n_variants = 2 })
   assert_eq(cfg.language, "ru", "merge language")
   assert_eq(cfg.adapter, "pi", "default adapter kept")
+  local cfg_model = config.merge({ model = "alibaba-cloud/qwen3.8-flash" })
+  assert_eq(cfg_model.model, "alibaba-cloud/qwen3.8-flash", "merge model")
+  assert_eq(cfg_model.adapter, "pi", "model merge keeps adapter")
+  local cfg_think = config.merge({ thinking = false })
+  assert_eq(cfg_think.thinking, false, "merge thinking false")
   local ok, err = config.validate({ n_variants = 0 })
   assert_true(not ok, "rejects bad n_variants")
   assert_true(type(err) == "string", "validate err")
@@ -483,6 +496,28 @@ do
   ok, err = config.validate({ n_variants = 10 })
   assert_true(not ok, "rejects n_variants 10")
   assert_true(type(err) == "string", "n_variants 10 err")
+  ok, err = config.validate({ model = "" })
+  assert_true(not ok, "rejects empty model")
+  assert_true(type(err) == "string" and err:find("model", 1, true) ~= nil, "empty model err")
+  ok, err = config.validate({ model = 1 })
+  assert_true(not ok, "rejects numeric model")
+  ok, err = config.validate({ model = "alibaba-cloud/qwen3.8-flash" })
+  assert_true(ok, "accepts string model")
+  ok, err = config.validate({ adapter = { name = "pi", model = "" } })
+  assert_true(not ok, "rejects empty adapter.model")
+  ok, err = config.validate({ adapter = { name = "pi", model = "alibaba-cloud/qwen3.8-flash" } })
+  assert_true(ok, "accepts adapter.model")
+  ok, err = config.validate({ thinking = "off" })
+  assert_true(not ok, "rejects string thinking")
+  assert_true(type(err) == "string" and err:find("thinking", 1, true) ~= nil, "string thinking err")
+  ok, err = config.validate({ thinking = false })
+  assert_true(ok, "accepts thinking false")
+  ok, err = config.validate({ thinking = true })
+  assert_true(ok, "accepts thinking true")
+  ok, err = config.validate({ adapter = { name = "pi", thinking = "off" } })
+  assert_true(not ok, "rejects string adapter.thinking")
+  ok, err = config.validate({ adapter = { name = "pi", thinking = false } })
+  assert_true(ok, "accepts adapter.thinking false")
 end
 
 -- cursor: prompt as last argv, empty stdin; opencode/pi stay stdin-only
@@ -510,6 +545,8 @@ do
   assert_eq(spec.args[sandbox_i + 1], "enabled", "cursor sandbox enabled")
   assert_true(not vim.tbl_contains(spec.args, "--force"), "cursor no --force")
   assert_true(not vim.tbl_contains(spec.args, "--yolo"), "cursor no --yolo")
+  assert_true(not vim.tbl_contains(spec.args, "--model"), "cursor default has no --model")
+  assert_true(not vim.tbl_contains(spec.args, "--thinking"), "cursor default has no --thinking")
 
   local oc = require("laler.llm.opencode")
   local ospec = oc:request("SECRET_PROMPT")
@@ -521,6 +558,273 @@ do
   assert_true(not vim.tbl_contains(ospec.args, "--permissions"), "opencode has no --permissions")
   assert_true(ospec.env and ospec.env.OPENCODE_PERMISSION ~= nil, "opencode permission env")
   assert_true(ospec.env.OPENCODE_PERMISSION:find("deny", 1, true) ~= nil, "opencode deny")
+  assert_true(not vim.tbl_contains(ospec.args, "--model"), "opencode default has no --model")
+  assert_true(not vim.tbl_contains(ospec.args, "--variant"), "opencode default has no --variant")
+  assert_true(not vim.tbl_contains(ospec.args, "--thinking"), "opencode default has no --thinking")
+end
+
+-- --model for pi, cursor, and opencode
+do
+  local function model_value(args)
+    for i, a in ipairs(args) do
+      if a == "--model" then
+        return args[i + 1], i
+      end
+    end
+    return nil, nil
+  end
+
+  local llm = require("laler.llm")
+  local pi = llm.resolve("pi", { model = "alibaba-cloud/qwen3.8-flash" })
+  local spec = pi:request("hello")
+  local pmodel, pi_i = model_value(spec.args)
+  assert_eq(pmodel, "alibaba-cloud/qwen3.8-flash", "pi --model value")
+  assert_true(vim.tbl_contains(spec.args, "--no-skills"), "pi model keeps builtin flags")
+  assert_eq(spec.stdin, "hello", "pi model stdin")
+  assert_true(pi_i ~= nil, "pi --model index")
+
+  local named = llm.resolve({
+    name = "pi",
+    model = "alibaba-cloud/qwen3.8-flash",
+  })
+  local nspec = named:request("hello")
+  local nmodel = model_value(nspec.args)
+  assert_eq(nmodel, "alibaba-cloud/qwen3.8-flash", "named builtin adapter.model")
+  assert_true(vim.tbl_contains(nspec.args, "--no-context-files"), "named builtin+model keeps pi flags")
+
+  local top_overridden = llm.resolve({
+    name = "pi",
+    model = "alibaba-cloud/qwen3.8-flash",
+  }, { model = "ignored-top-level" })
+  local omodel = model_value(top_overridden:request("x").args)
+  assert_eq(omodel, "alibaba-cloud/qwen3.8-flash", "adapter.model wins over top-level")
+
+  local cursor = require("laler.llm.cursor").new({ model = "gpt-5" })
+  local cspec = cursor:request("SECRET_PROMPT")
+  local cmodel, ci = model_value(cspec.args)
+  assert_eq(cmodel, "gpt-5", "cursor --model value")
+  assert_eq(cspec.args[#cspec.args], "SECRET_PROMPT", "cursor prompt still last with --model")
+  assert_true(ci ~= nil and ci < #cspec.args, "cursor --model before prompt")
+  assert_eq(cspec.stdin, "", "cursor stdin empty with --model")
+
+  local oc = require("laler.llm.opencode").new({ model = "anthropic/claude-sonnet-4-5" })
+  local ospec_m = oc:request("SECRET_PROMPT")
+  local om = model_value(ospec_m.args)
+  assert_eq(om, "anthropic/claude-sonnet-4-5", "opencode --model value")
+  assert_eq(ospec_m.stdin, "SECRET_PROMPT", "opencode stdin with --model")
+  assert_true(not table.concat(ospec_m.args, "\0"):find("SECRET_PROMPT", 1, true), "opencode args have no prompt with --model")
+  assert_eq(ospec_m.args[1], "run", "opencode run with --model")
+
+  local via_resolve = llm.resolve("cursor", { model = "gpt-5" })
+  local rspec = via_resolve:request("PROMPT")
+  local rm = model_value(rspec.args)
+  assert_eq(rm, "gpt-5", "resolve cursor model")
+  assert_eq(rspec.args[#rspec.args], "PROMPT", "resolve cursor prompt last")
+
+  local oc_resolve = llm.resolve("opencode", { model = "anthropic/claude-sonnet-4-5" })
+  local orm = model_value(oc_resolve:request("x").args)
+  assert_eq(orm, "anthropic/claude-sonnet-4-5", "resolve opencode model")
+
+  local generic = llm.resolve({
+    name = "echo",
+    cmd = "echo",
+    args = { "-n" },
+    model = "custom-model",
+  })
+  local gspec = generic:request("x")
+  local gm = model_value(gspec.args)
+  assert_eq(gm, "custom-model", "generic adapter.model")
+  assert_true(vim.tbl_contains(gspec.args, "-n"), "generic keeps args")
+
+  local gtop = llm.resolve({
+    name = "echo",
+    cmd = "echo",
+    args = { "-n" },
+  }, { model = "from-top" })
+  local gtm = model_value(gtop:request("x").args)
+  assert_eq(gtm, "from-top", "generic gets top-level model")
+
+  local empty_model = require("laler.llm.pi").new({ model = "" })
+  assert_true(not vim.tbl_contains(empty_model:request("x").args, "--model"), "empty model omitted")
+
+  local ok_setup = pcall(function()
+    require("laler").setup({ adapter = "pi", model = "alibaba-cloud/qwen3.8-flash" })
+  end)
+  assert_true(ok_setup, "setup with model")
+  assert_eq(require("laler")._config.model, "alibaba-cloud/qwen3.8-flash", "setup stores model")
+
+  local stored = { "-n", "--flag" }
+  local copied = require("laler.llm.generic").new({
+    name = "echo",
+    cmd = "echo",
+    args = stored,
+    model = "m",
+  })
+  local cargs = copied:request("x").args
+  local cm = model_value(cargs)
+  assert_eq(cm, "m", "generic new() model")
+  assert_eq(#stored, 2, "generic model does not mutate stored args")
+  assert_eq(stored[1], "-n", "generic stored args unchanged")
+
+  -- table with cmd still uses generic (does not switch to builtin flags)
+  local generic_pi = llm.resolve({
+    name = "pi",
+    cmd = "pi",
+    args = {
+      "-p",
+      "--no-tools",
+      "--no-session",
+      "--thinking",
+      "off",
+      "--model",
+      "alibaba-cloud/qwen3.8-flash",
+    },
+  })
+  local gpspec = generic_pi:request("x")
+  assert_true(vim.tbl_contains(gpspec.args, "--thinking"), "generic pi keeps extra args")
+  assert_true(vim.tbl_contains(gpspec.args, "alibaba-cloud/qwen3.8-flash"), "generic pi keeps --model in args")
+  assert_true(not vim.tbl_contains(gpspec.args, "--no-skills"), "generic pi does not add builtin-only flags")
+end
+
+-- thinking = false for pi, cursor, and opencode
+do
+  local function flag_value(args, flag)
+    for i, a in ipairs(args) do
+      if a == flag then
+        return args[i + 1], i
+      end
+    end
+    return nil, nil
+  end
+
+  local llm = require("laler.llm")
+  local pi = llm.resolve("pi", {
+    model = "alibaba-cloud/qwen3.8-flash",
+    thinking = false,
+  })
+  local spec = pi:request("hello")
+  assert_eq(flag_value(spec.args, "--thinking"), "off", "pi --thinking off")
+  assert_eq(flag_value(spec.args, "--model"), "alibaba-cloud/qwen3.8-flash", "pi model with thinking off")
+  assert_true(vim.tbl_contains(spec.args, "--no-skills"), "pi thinking keeps builtin flags")
+  local think_i, model_i
+  for i, a in ipairs(spec.args) do
+    if a == "--thinking" then
+      think_i = i
+    elseif a == "--model" then
+      model_i = i
+    end
+  end
+  assert_true(think_i ~= nil and model_i ~= nil and think_i < model_i, "pi --thinking before --model")
+
+  local named = llm.resolve({
+    name = "pi",
+    model = "alibaba-cloud/qwen3.8-flash",
+    thinking = false,
+  })
+  local nspec = named:request("hello")
+  assert_eq(flag_value(nspec.args, "--thinking"), "off", "named builtin adapter.thinking")
+
+  local top_overridden = llm.resolve({
+    name = "pi",
+    thinking = false,
+  }, { thinking = true })
+  assert_eq(flag_value(top_overridden:request("x").args, "--thinking"), "off", "adapter.thinking wins over top-level")
+
+  local top_false_overridden = llm.resolve({
+    name = "pi",
+    thinking = true,
+  }, { thinking = false })
+  assert_true(
+    not vim.tbl_contains(top_false_overridden:request("x").args, "--thinking"),
+    "adapter.thinking true wins over top-level false"
+  )
+
+  local think_true = llm.resolve("pi", { thinking = true })
+  assert_true(not vim.tbl_contains(think_true:request("x").args, "--thinking"), "thinking true does not add --thinking")
+
+  local oc = require("laler.llm.opencode").new({
+    model = "anthropic/claude-sonnet-4-5",
+    thinking = false,
+  })
+  local ospec = oc:request("SECRET_PROMPT")
+  assert_eq(flag_value(ospec.args, "--variant"), "none", "opencode --variant none")
+  assert_true(not vim.tbl_contains(ospec.args, "--thinking"), "opencode thinking false is not --thinking")
+  assert_eq(flag_value(ospec.args, "--model"), "anthropic/claude-sonnet-4-5", "opencode model with thinking off")
+  assert_eq(ospec.args[1], "run", "opencode run with thinking off")
+
+  local oc_resolve = llm.resolve("opencode", { thinking = false })
+  assert_eq(flag_value(oc_resolve:request("x").args, "--variant"), "none", "resolve opencode thinking")
+
+  local cursor = require("laler.llm.cursor").new({ model = "gpt-5", thinking = false })
+  local cspec = cursor:request("SECRET_PROMPT")
+  assert_true(not vim.tbl_contains(cspec.args, "--thinking"), "cursor thinking false has no --thinking")
+  assert_true(not vim.tbl_contains(cspec.args, "--variant"), "cursor thinking false has no --variant")
+  assert_eq(cspec.args[#cspec.args], "SECRET_PROMPT", "cursor prompt still last with thinking false")
+  assert_eq(flag_value(cspec.args, "--model"), "gpt-5", "cursor model with thinking false")
+
+  local generic = llm.resolve({
+    name = "echo",
+    cmd = "echo",
+    args = { "-n" },
+    thinking = false,
+  })
+  local gspec = generic:request("x")
+  assert_eq(flag_value(gspec.args, "--thinking"), "off", "generic adapter.thinking")
+  assert_true(vim.tbl_contains(gspec.args, "-n"), "generic thinking keeps args")
+
+  local gtop = llm.resolve({
+    name = "echo",
+    cmd = "echo",
+    args = { "-n" },
+  }, { thinking = false })
+  assert_eq(flag_value(gtop:request("x").args, "--thinking"), "off", "generic gets top-level thinking")
+
+  local stored = { "-n", "--flag" }
+  local copied = require("laler.llm.generic").new({
+    name = "echo",
+    cmd = "echo",
+    args = stored,
+    thinking = false,
+  })
+  local cargs = copied:request("x").args
+  assert_eq(flag_value(cargs, "--thinking"), "off", "generic new() thinking")
+  assert_eq(#stored, 2, "generic thinking does not mutate stored args")
+
+end
+
+-- setup wires model/thinking into session llm client
+do
+  local laler = require("laler")
+  local session = require("laler.session")
+
+  local function flag_value(args, flag)
+    for i, a in ipairs(args) do
+      if a == flag then
+        return args[i + 1], i
+      end
+    end
+    return nil, nil
+  end
+
+  local ok_setup = pcall(function()
+    laler.setup({
+      adapter = "pi",
+      model = "alibaba-cloud/qwen3.8-flash",
+      thinking = false,
+    })
+  end)
+  assert_true(ok_setup, "setup with model and thinking false")
+  assert_eq(laler._config.model, "alibaba-cloud/qwen3.8-flash", "setup stores model")
+  assert_eq(laler._config.thinking, false, "setup stores thinking")
+
+  local ctx = session._ctx()
+  assert_true(ctx ~= nil and ctx.llm ~= nil, "setup binds session ctx")
+  local spec = ctx.llm:request("hello")
+  assert_eq(spec.cmd, "pi", "setup llm pi cmd")
+  assert_eq(spec.stdin, "hello", "setup llm stdin")
+  assert_eq(flag_value(spec.args, "--model"), "alibaba-cloud/qwen3.8-flash", "setup llm --model")
+  assert_eq(flag_value(spec.args, "--thinking"), "off", "setup llm --thinking off")
+  assert_true(vim.tbl_contains(spec.args, "--no-skills"), "setup llm keeps pi flags")
 end
 
 -- job generation helper

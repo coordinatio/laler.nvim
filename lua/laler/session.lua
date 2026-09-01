@@ -34,6 +34,11 @@ function M._active()
   return active
 end
 
+--- Test helper: bound session context, or nil before setup.
+function M._ctx()
+  return ctx
+end
+
 ---@return laler.SessionCtx
 local function require_ctx()
   if not ctx then

@@ -1,3 +1,5 @@
+local argv = require("laler.llm.argv")
+
 ---@implements laler.LlmClient
 local M = {
   name = "cursor",
@@ -14,18 +16,44 @@ local function resolve_bin()
   return "agent"
 end
 
----@param composed string
----@return laler.JobSpec
-function M:request(composed)
-  if type(composed) == "string" and #composed > 24000 then
-    error("laler: prompt too large for cursor adapter (use a smaller range)")
+---@param opts? { model?: string, thinking?: boolean }
+---@return laler.LlmClient
+function M.new(opts)
+  opts = opts or {}
+  local model = opts.model
+  ---@type laler.LlmClient
+  local client = { name = "cursor" }
+  function client:request(composed)
+    if type(composed) == "string" and #composed > 24000 then
+      error("laler: prompt too large for cursor adapter (use a smaller range)")
+    end
+    -- `agent -p` takes the prompt as a positional argument; stdin is ignored.
+    -- `--model` must come before that positional prompt.
+    -- Cursor has no `--thinking` flag; disable thinking by choosing a non-thinking model.
+    local args = argv.with_model({
+      "-p",
+      "--mode",
+      "ask",
+      "--output-format",
+      "text",
+      "--trust",
+      "--sandbox",
+      "enabled",
+    }, model)
+    args[#args + 1] = composed
+    return {
+      cmd = resolve_bin(),
+      args = args,
+      stdin = "",
+    }
   end
-  -- `agent -p` takes the prompt as a positional argument; stdin is ignored.
-  return {
-    cmd = resolve_bin(),
-    args = { "-p", "--mode", "ask", "--output-format", "text", "--trust", "--sandbox", "enabled", composed },
-    stdin = "",
-  }
+  return client
+end
+
+local default = M.new()
+
+function M:request(composed)
+  return default:request(composed)
 end
 
 return M

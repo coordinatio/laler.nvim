@@ -29,6 +29,8 @@ SETUP                                                              *laler-setup*
 >lua
   require("laler").setup({
     adapter = "pi",           -- "cursor" | "opencode" | custom table
+    model = nil,              -- optional CLI --model (all built-ins)
+    thinking = nil,           -- optional; false disables reasoning
     language = "en",
     n_variants = 3,
     default_prompt = "correct",
@@ -101,6 +103,48 @@ Built-ins (tools disabled so agents do not edit files):
   opencode   `opencode run --format default --pure`; OPENCODE_PERMISSION
              deny-all (no `--permissions` flag on `run`)
 
+When `model` is set (top-level or `adapter.model`), built-ins add
+`--model {name}`. For cursor it is inserted before the positional prompt.
+If both top-level `model` and `adapter.model` are set, `adapter.model` wins.
+
+When `thinking` is `false` (top-level or `adapter.thinking`), pi adds
+`--thinking off` and opencode adds `--variant none` (best-effort: some models
+may still emit reasoning). Cursor has no thinking flag; choose a non-thinking
+model instead. If both top-level `thinking` and `adapter.thinking` are set,
+`adapter.thinking` wins.
+
+Generic adapters (`cmd` / `args` tables) append `--thinking off` for
+`thinking = false` (pi-style). Only the built-in opencode adapter uses
+`--variant none`.
+
+Examples~
+>lua
+  require("laler").setup({
+    adapter = "pi",
+    model = "alibaba-cloud/qwen3.8-flash",
+    thinking = false,
+  })
+
+  require("laler").setup({
+    adapter = "cursor",
+    model = "gpt-5",
+  })
+
+  require("laler").setup({
+    adapter = "opencode",
+    model = "anthropic/claude-sonnet-4-5",
+    thinking = false,
+  })
+
+  require("laler").setup({
+    adapter = {
+      name = "pi",
+      model = "alibaba-cloud/qwen3.8-flash",
+      thinking = false,
+    },
+  })
+<
+
 Custom adapter table~
 >lua
   require("laler").setup({
@@ -108,8 +152,15 @@ Custom adapter table~
       name = "my-cli",
       cmd = "my-llm",
       args = { "--print" },
+      model = "my-model",       -- optional; appends --model
+      thinking = false,         -- optional; --thinking off (not opencode --variant none)
     },
   })
+<
+Generic adapters append `--model` / `--thinking` to `args`; do not duplicate
+those flags in `args` when also using `model` / `thinking` options.
+
+With `build()`, `model` and `thinking` are ignored; emit argv flags in `build()`.
 <
 
 Or register at runtime:

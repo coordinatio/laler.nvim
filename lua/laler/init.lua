@@ -46,7 +46,7 @@ function M.setup(user_opts)
     config = cfg,
     catalog = catalog,
     composer = require("laler.prompt.composer"),
-    llm = llm_reg.resolve(cfg.adapter),
+    llm = llm_reg.resolve(cfg.adapter, { model = cfg.model, thinking = cfg.thinking }),
     jobs = require("laler.job.vim_system"),
     parser = require("laler.parse.json"),
     picker = picker_reg.resolve(cfg.picker),

@@ -4,6 +4,8 @@ local M = {}
 function M.defaults()
   return {
     adapter = "pi",
+    model = nil,
+    thinking = nil,
     language = "en",
     n_variants = 3,
     default_prompt = "correct",
@@ -45,6 +47,24 @@ function M.validate(cfg)
   end
   if cfg.adapter ~= nil and type(cfg.adapter) ~= "string" and type(cfg.adapter) ~= "table" then
     return false, "adapter must be a string name or a table"
+  end
+  if cfg.model ~= nil then
+    if type(cfg.model) ~= "string" or cfg.model == "" then
+      return false, "model must be a non-empty string"
+    end
+  end
+  if type(cfg.adapter) == "table" and cfg.adapter.model ~= nil then
+    if type(cfg.adapter.model) ~= "string" or cfg.adapter.model == "" then
+      return false, "adapter.model must be a non-empty string"
+    end
+  end
+  if cfg.thinking ~= nil and type(cfg.thinking) ~= "boolean" then
+    return false, "thinking must be a boolean"
+  end
+  if type(cfg.adapter) == "table" and cfg.adapter.thinking ~= nil then
+    if type(cfg.adapter.thinking) ~= "boolean" then
+      return false, "adapter.thinking must be a boolean"
+    end
   end
   if cfg.mappings ~= nil and cfg.mappings ~= false and type(cfg.mappings) ~= "table" then
     return false, "mappings must be false or a table"

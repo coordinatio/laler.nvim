@@ -77,6 +77,18 @@
 ---@field name string
 ---@field request fun(self: laler.LlmClient, composed: string): laler.JobSpec
 
+--- Generic adapter options. `model` / `thinking` apply to `cmd`+`args` adapters only;
+--- when `build` is set they are ignored (emit flags inside `build()`).
+---@class laler.AdapterOpts
+---@field name? string
+---@field model? string
+---@field thinking? boolean
+---@field cmd? string|string[]
+---@field args? string[]
+---@field env? table<string, string>
+---@field cwd? string
+---@field build? fun(composed: string): laler.JobSpec
+
 ---@class laler.JobRunner
 ---@field start fun(self: laler.JobRunner, spec: laler.JobSpec, callbacks: laler.JobCallbacks, opts?: { timeout_ms?: integer })
 ---@field cancel fun(self: laler.JobRunner)

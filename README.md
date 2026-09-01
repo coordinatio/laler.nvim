@@ -57,7 +57,9 @@ Commands:
 
 ```lua
 require("laler").setup({
-  adapter = "pi", -- "cursor" | "opencode" | { name, cmd, args, env, build }
+  adapter = "pi", -- "cursor" | "opencode" | { name, model, thinking, cmd, args, env, build }
+  model = nil, -- optional CLI --model for pi, cursor, and opencode
+  thinking = nil, -- optional; `false` disables model reasoning
   language = "en",
   n_variants = 3,
   default_prompt = "correct",
@@ -69,6 +71,86 @@ require("laler").setup({
 })
 ```
 
+### Model
+
+Built-in adapters pass `--model NAME` to the CLI when `model` is set. Omit it to use the CLI default.
+
+If both top-level `model` and `adapter.model` are set on an adapter table, **`adapter.model` takes precedence**.
+
+```lua
+-- pi (same flag as `pi --model alibaba-cloud/qwen3.8-flash`)
+require("laler").setup({
+  adapter = "pi",
+  model = "alibaba-cloud/qwen3.8-flash",
+})
+
+-- Cursor CLI (`agent -p --model gpt-5`)
+require("laler").setup({
+  adapter = "cursor",
+  model = "gpt-5",
+})
+
+-- OpenCode (`opencode run --model anthropic/claude-sonnet-4-5`)
+require("laler").setup({
+  adapter = "opencode",
+  model = "anthropic/claude-sonnet-4-5",
+})
+```
+
+Same option on a named built-in table (keeps the adapter's default flags):
+
+```lua
+require("laler").setup({
+  adapter = {
+    name = "pi",
+    model = "alibaba-cloud/qwen3.8-flash",
+  },
+})
+```
+
+### Thinking
+
+Set `thinking = false` to disable model reasoning. Omit it (or set `true`) to leave the CLI default.
+
+If both top-level `thinking` and `adapter.thinking` are set on an adapter table, **`adapter.thinking` takes precedence**.
+
+Generic adapters (custom `cmd` / `args` tables) use pi-style `--thinking off` when `thinking = false`. Only the built-in **opencode** adapter uses `--variant none` instead (best-effort: some models may still emit reasoning).
+
+```lua
+-- pi: `--thinking off`
+require("laler").setup({
+  adapter = "pi",
+  model = "alibaba-cloud/qwen3.8-flash",
+  thinking = false,
+})
+
+-- OpenCode: `--variant none` (not `run --thinking`, which only shows thinking blocks)
+require("laler").setup({
+  adapter = "opencode",
+  model = "anthropic/claude-sonnet-4-5",
+  thinking = false,
+})
+
+-- Cursor has no thinking flag; pick a non-thinking model instead
+require("laler").setup({
+  adapter = "cursor",
+  model = "gpt-5",
+  thinking = false,
+})
+```
+
+Same option on a named built-in table:
+
+```lua
+require("laler").setup({
+  adapter = {
+    name = "pi",
+    model = "alibaba-cloud/qwen3.8-flash",
+    thinking = false,
+  },
+})
+```
+
 ### Custom adapter
 
 ```lua
@@ -77,9 +159,15 @@ require("laler").setup({
     name = "my-cli",
     cmd = "my-llm",
     args = { "--print" },
+    model = "my-model", -- optional; appends --model
+    thinking = false, -- optional; appends --thinking off (pi-style, not opencode --variant none)
   },
 })
 ```
+
+Generic adapters append `--model` / `--thinking` to `args`; avoid duplicating those flags in `args` when also using `model` / `thinking` options.
+
+Custom adapters with a `build()` function ignore `model` and `thinking`; emit those flags inside `build()` if needed.
 
 Prompt delivery:
 
@@ -91,6 +179,8 @@ Built-in adapters disable agent tools so they do not edit files:
 - **pi:** `-p --no-tools --no-session --no-context-files --no-extensions --no-skills`
 - **cursor:** `-p --mode ask --output-format text --trust --sandbox enabled` (ask is read-only; workspace trust for headless; not `--force`)
 - **opencode:** `run --format default --pure`, plus `OPENCODE_PERMISSION` deny-all (no `--permissions` flag; that option is not on `run`)
+
+When `model` is set, each of those invocations also gets `--model NAME` (for cursor, before the positional prompt). When `thinking` is `false`, pi also gets `--thinking off` and opencode gets `--variant none`. Cursor has no thinking flag.
 
 ## Built-in prompts
 
