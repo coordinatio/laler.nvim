@@ -11,6 +11,8 @@ local operator_mode = "run" ---@type "run"|"pick"
 local last_map = {
   run = nil, ---@type string|nil
   pick = nil, ---@type string|nil
+  buffer = nil, ---@type string|nil
+  pick_buffer = nil, ---@type string|nil
 }
 
 ---@param lhs string|nil
@@ -60,12 +62,16 @@ function M.setup(user_opts)
   M._apply_mappings(cfg.mappings)
 end
 
----@param mappings { run?: string|false, pick?: string|false }|false|nil
+---@param mappings { run?: string|false, pick?: string|false, buffer?: string|false, pick_buffer?: string|false }|false|nil
 function M._apply_mappings(mappings)
   unmap_lhs(last_map.run)
   unmap_lhs(last_map.pick)
+  unmap_lhs(last_map.buffer)
+  unmap_lhs(last_map.pick_buffer)
   last_map.run = nil
   last_map.pick = nil
+  last_map.buffer = nil
+  last_map.pick_buffer = nil
 
   if type(mappings) ~= "table" then
     return
@@ -91,6 +97,35 @@ function M._apply_mappings(mappings)
     end, { desc = "laler: pick prompt for selection" })
     last_map.pick = pick
   end
+  local buffer = mappings.buffer
+  if type(buffer) == "string" and buffer ~= "" then
+    vim.keymap.set("n", buffer, function()
+      M.run_buffer()
+    end, { desc = "laler: correct buffer" })
+    last_map.buffer = buffer
+  end
+  local pick_buffer = mappings.pick_buffer
+  if type(pick_buffer) == "string" and pick_buffer ~= "" then
+    vim.keymap.set("n", pick_buffer, function()
+      M.pick_buffer()
+    end, { desc = "laler: pick prompt for buffer" })
+    last_map.pick_buffer = pick_buffer
+  end
+end
+
+--- Correct the entire current buffer (same as `:%Laler`).
+function M.run_buffer()
+  M.setup_if_needed()
+  local n = vim.api.nvim_buf_line_count(0)
+  -- range_count 0: linewise whole buffer; ignore leftover visual marks
+  M.run_command(1, n, nil, 0)
+end
+
+--- Pick a prompt, then correct the entire current buffer (same as `:%LalerPick`).
+function M.pick_buffer()
+  M.setup_if_needed()
+  local n = vim.api.nvim_buf_line_count(0)
+  M.pick_command(1, n, 0)
 end
 
 function M.run_visual()

@@ -22,6 +22,8 @@ lazy.nvim:
     mappings = {
       run = "<leader>ll",
       pick = "<leader>lL",
+      buffer = "<leader>la",
+      pick_buffer = "<leader>lA",
     },
   },
 }
@@ -29,11 +31,19 @@ lazy.nvim:
 
 ## Usage
 
-1. Select text in visual mode, or in normal mode use the operator (`<leader>llip`, etc.).
+1. Select text in visual mode, or in normal mode use **`run`** / **`pick`** as operators:
+   - `<leader>lliw` — current word
+   - `<leader>llip` / `<leader>llap` — inner / around paragraph
+   - `<leader>llis` / `<leader>llas` — inner / around sentence
+   - `<leader>ll$` — to end of line
+   - `<leader>llG` — to end of buffer
+   - `<leader>ll}` — next blank-line-separated block
 2. **`run`** uses the default / last-used prompt immediately.
-3. **`pick`** opens a prompt selector (first item = default).
-4. A float shows loading, then variants with unified diff + notes.
-5. Cycle with `Tab` / `S-Tab`, apply with `<CR>`, cancel with `q` / `<Esc>`.
+3. **`pick`** opens a prompt selector (first item = default); same motions work with `<leader>lL`.
+4. **`buffer`** (`<leader>la`) corrects the whole buffer (same as `:%Laler`).
+5. **`pick_buffer`** (`<leader>lA`) picks a prompt, then corrects the whole buffer (same as `:%LalerPick`).
+6. A float shows loading, then variants with unified diff + notes.
+7. Cycle with `Tab` / `S-Tab`, apply with `<CR>`, cancel with `q` / `<Esc>`.
 
 Commands:
 
@@ -54,7 +64,7 @@ require("laler").setup({
   remember_last_prompt = true,
   picker = nil, -- "fzf-lua" | "telescope" | "vim_ui" | nil = auto
   timeout_ms = 60000,
-  mappings = { run = "<leader>ll", pick = "<leader>lL" }, -- or false
+  mappings = { run = "<leader>ll", pick = "<leader>lL", buffer = "<leader>la", pick_buffer = "<leader>lA" }, -- or false
   -- prompts = { ... }, -- override builtins
 })
 ```

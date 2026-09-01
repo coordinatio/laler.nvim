@@ -38,6 +38,8 @@ SETUP                                                              *laler-setup*
     mappings = {
       run = "<leader>ll",
       pick = "<leader>lL",
+      buffer = "<leader>la",
+      pick_buffer = "<leader>lA",
     },
     -- prompts = { ... },    -- override built-in prompt list
   })
@@ -64,6 +66,9 @@ MAPPINGS                                                        *laler-mappings*
 When configured:
   Normal: `run` / `pick` are operators — e.g. `<leader>llip`, `<leader>llap`
   Visual: `run` / `pick` use the current selection (char/line; not block)
+  Normal: `buffer` corrects the whole buffer (same as `:%Laler`)
+  Normal: `pick_buffer` picks a prompt, then corrects the whole buffer
+             (same as `:%LalerPick`)
 
 ==============================================================================
 REVIEW UI                                                         *laler-review*

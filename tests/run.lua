@@ -947,14 +947,55 @@ end
 -- re-setup unmaps previous keys
 do
   local laler = require("laler")
-  laler._apply_mappings({ run = "ll", pick = "lL" })
+  laler._apply_mappings({ run = "ll", pick = "lL", buffer = "la", pick_buffer = "lA" })
   assert_true(vim.fn.maparg("ll", "n") ~= "", "ll mapped")
+  assert_true(vim.fn.maparg("la", "n") ~= "", "buffer mapped")
+  assert_true(vim.fn.maparg("lA", "n") ~= "", "pick_buffer mapped")
   laler._apply_mappings({ run = "zz" })
   assert_eq(vim.fn.maparg("ll", "n"), "", "old nmap gone after remap")
   assert_true(vim.fn.maparg("zz", "n") ~= "", "zz mapped")
   assert_eq(vim.fn.maparg("lL", "n"), "", "old pick unmapped")
+  assert_eq(vim.fn.maparg("la", "n"), "", "old buffer unmapped")
+  assert_eq(vim.fn.maparg("lA", "n"), "", "old pick_buffer unmapped")
+  laler._apply_mappings({ buffer = "lb", pick_buffer = "lB" })
+  assert_true(vim.fn.maparg("lb", "n") ~= "", "buffer remapped")
+  assert_true(vim.fn.maparg("lB", "n") ~= "", "pick_buffer remapped")
   laler._apply_mappings(false)
   assert_eq(vim.fn.maparg("zz", "n"), "", "mappings=false unmaps")
+  assert_eq(vim.fn.maparg("lb", "n"), "", "mappings=false unmaps buffer")
+  assert_eq(vim.fn.maparg("lB", "n"), "", "mappings=false unmaps pick_buffer")
+end
+
+-- run_buffer / pick_buffer use whole-buffer line range
+do
+  local laler = require("laler")
+  laler.setup({})
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two", "three" })
+  local session = require("laler.session")
+  local orig = session.run_with_range
+  local got
+  session.run_with_range = function(r)
+    got = r
+  end
+  laler.run_buffer()
+  session.run_with_range = orig
+  assert_true(got ~= nil, "run_buffer captured")
+  assert_eq(got.mode, "line", "run_buffer line mode")
+  assert_eq(got.text, "one\ntwo\nthree", "run_buffer whole buffer text")
+
+  local orig_pick = session.pick_and_run
+  local picked
+  session.pick_and_run = function(r)
+    picked = r
+  end
+  laler.pick_buffer()
+  session.pick_and_run = orig_pick
+  assert_true(picked ~= nil, "pick_buffer captured")
+  assert_eq(picked.mode, "line", "pick_buffer line mode")
+  assert_eq(picked.text, "one\ntwo\nthree", "pick_buffer whole buffer text")
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 -- CJK per-char tokens; Cyrillic still groups
