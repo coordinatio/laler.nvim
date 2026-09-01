@@ -1,4 +1,54 @@
+local util = require("laler.util")
+
 local M = {}
+
+---@param n any
+---@param id string
+local function check_n_variants(n, id)
+  if n == nil then
+    return
+  end
+  if type(n) ~= "number" or n < 1 or n > 9 or math.floor(n) ~= n then
+    error("laler: prompt '" .. id .. "' n_variants must be an integer between 1 and 9")
+  end
+end
+
+---@param p any
+---@param id_hint? string
+---@return laler.PromptDef
+local function normalize_prompt(p, id_hint)
+  if type(p) ~= "table" then
+    if id_hint then
+      error("laler: prompt '" .. tostring(id_hint) .. "' must be a table")
+    end
+    error("laler: prompt must be a table")
+  end
+  local def = vim.tbl_extend("force", {}, p)
+  def.id = def.id or id_hint
+  if type(def.id) ~= "string" or def.id == "" then
+    error("laler: prompt missing string id")
+  end
+  if def.id:find("%s") then
+    error("laler: prompt id must not contain whitespace")
+  end
+  if type(def.template) ~= "string" then
+    error("laler: prompt '" .. def.id .. "' must have a string template")
+  end
+  if not def.template:find("{{text}}", 1, true) then
+    error("laler: prompt '" .. def.id .. "' template must include {{text}}")
+  end
+  check_n_variants(def.n_variants, def.id)
+  if def.label ~= nil and type(def.label) ~= "string" then
+    error("laler: prompt '" .. def.id .. "' label must be a string")
+  end
+  if def.description ~= nil and type(def.description) ~= "string" then
+    error("laler: prompt '" .. def.id .. "' description must be a string")
+  end
+  if type(def.label) ~= "string" or def.label == "" then
+    def.label = def.id
+  end
+  return def
+end
 
 ---@return laler.PromptDef[]
 function M.builtin()
@@ -9,7 +59,7 @@ function M.builtin()
       description = "Grammar + native-speaker fluency",
       template = [[Analyze the {{language}} passage inside {{text_open}}…{{text_close}} for formal correctness and how closely it matches what a native speaker would write.
 
-Provide {{n_variants}} corrected variants:
+Provide {{n_variants}} corrected {{variant_noun}}:
 {{variant_list}}
 
 Passage:
@@ -20,7 +70,8 @@ Passage:
       label = "Formal",
       description = "More formal register",
       template = [[Rewrite the {{language}} passage inside {{text_open}}…{{text_close}} in a more formal register.
-Provide {{n_variants}} variants with labels "formal-1", "formal-2", etc.
+Provide {{n_variants}} {{variant_noun}}:
+{{variant_list}}
 
 Passage:
 {{text}}]],
@@ -30,7 +81,8 @@ Passage:
       label = "Casual",
       description = "More casual / conversational",
       template = [[Rewrite the {{language}} passage inside {{text_open}}…{{text_close}} in a more casual, conversational register.
-Provide {{n_variants}} variants with labels "casual-1", "casual-2", etc.
+Provide {{n_variants}} {{variant_noun}}:
+{{variant_list}}
 
 Passage:
 {{text}}]],
@@ -40,7 +92,8 @@ Passage:
       label = "Concise",
       description = "Shorter and clearer",
       template = [[Rewrite the {{language}} passage inside {{text_open}}…{{text_close}} to be more concise and clear without losing meaning.
-Provide {{n_variants}} variants with labels "concise-1", "concise-2", etc.
+Provide {{n_variants}} {{variant_noun}}:
+{{variant_list}}
 
 Passage:
 {{text}}]],
@@ -55,72 +108,63 @@ function M.new(opts)
   local list = {}
   local by_id = {}
 
+  ---@param def laler.PromptDef
+  local function push(def)
+    if by_id[def.id] then
+      error("laler: duplicate prompt id '" .. def.id .. "'")
+    end
+    list[#list + 1] = def
+    by_id[def.id] = def
+  end
+
   local source = opts.prompts
   if source == nil then
     source = M.builtin()
   end
 
-  local is_list = false
-  if type(source) == "table" then
-    if vim.islist then
-      is_list = vim.islist(source)
-    else
-      is_list = source[1] ~= nil
-    end
-  end
-
-  if is_list then
+  if util.is_list(source) then
     for _, p in ipairs(source) do
-      if type(p) ~= "table" then
-        error("laler: prompt must be a table")
-      end
-      local def = vim.tbl_extend("force", {}, p)
-      if type(def.id) ~= "string" or def.id == "" then
-        error("laler: prompt missing string id")
-      end
-      if def.id:find("%s") then
-        error("laler: prompt id must not contain whitespace")
-      end
-      if by_id[def.id] then
-        error("laler: duplicate prompt id '" .. def.id .. "'")
-      end
-      if type(def.template) ~= "string" then
-        error("laler: prompt '" .. def.id .. "' must have a string template")
-      end
-      if type(def.label) ~= "string" or def.label == "" then
-        def.label = def.id
-      end
-      list[#list + 1] = def
-      by_id[def.id] = def
+      push(normalize_prompt(p))
     end
   else
+    for _, p in ipairs(M.builtin()) do
+      push(normalize_prompt(p))
+    end
+    local extras = {}
+    local seen_user = {}
     for id, p in pairs(source) do
       if type(p) ~= "table" then
         error("laler: prompt '" .. tostring(id) .. "' must be a table")
       end
-      local def = vim.tbl_extend("force", {}, p)
-      def.id = def.id or id
-      if type(def.id) ~= "string" or def.id == "" then
-        error("laler: prompt missing string id")
+      if p.id ~= nil and p.id ~= id then
+        error("laler: prompt map key '" .. tostring(id) .. "' must match id '" .. tostring(p.id) .. "'")
       end
-      if def.id:find("%s") then
-        error("laler: prompt id must not contain whitespace")
+      local pid = p.id or id
+      if seen_user[pid] then
+        error("laler: duplicate prompt id '" .. tostring(pid) .. "'")
       end
-      if by_id[def.id] then
-        error("laler: duplicate prompt id '" .. def.id .. "'")
+      seen_user[pid] = true
+      local base = type(pid) == "string" and by_id[pid] or nil
+      if base then
+        local def = normalize_prompt(vim.tbl_extend("force", base, p), pid)
+        for i, existing in ipairs(list) do
+          if existing.id == def.id then
+            list[i] = def
+            break
+          end
+        end
+        by_id[def.id] = def
+      else
+        extras[#extras + 1] = normalize_prompt(p, id)
       end
-      if type(def.template) ~= "string" then
-        error("laler: prompt '" .. def.id .. "' must have a string template")
-      end
-      if type(def.label) ~= "string" or def.label == "" then
-        def.label = def.id
-      end
+    end
+    table.sort(extras, function(a, b)
+      return a.id < b.id
+    end)
+    for _, def in ipairs(extras) do
       list[#list + 1] = def
       by_id[def.id] = def
     end
-    table.sort(list, function(a, b)
-      return a.id < b.id
-    end)
   end
 
   if opts.prompts ~= nil and #list == 0 then

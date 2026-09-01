@@ -43,7 +43,7 @@ SETUP                                                              *laler-setup*
       buffer = "<leader>la",
       pick_buffer = "<leader>lA",
     },
-    -- prompts = { ... },    -- override built-in prompt list
+    -- prompts = { ... },    -- map: add/override; list: replace
   })
 <
 
@@ -175,11 +175,69 @@ PROMPTS                                                          *laler-prompts*
 Built-in ids: `correct`, `formal`, `casual`, `concise`.
 
 Templates may use placeholders: `{{text}}`, `{{language}}`, `{{filetype}}`,
-`{{n_variants}}`, `{{text_open}}`, `{{text_close}}`, `{{variant_list}}`.
+`{{n_variants}}`, `{{variant_noun}}`, `{{text_open}}`, `{{text_close}}`,
+`{{variant_list}}`.
 `{{text}}` is the passage wrapped in unique delimiters; `{{text_open}}` /
-`{{text_close}}` are those delimiter strings; `{{variant_list}}` is a numbered
-list of requested variant labels. The composer prepends a JSON-only output
-contract.
+`{{text_close}}` are those delimiter strings; `{{n_variants}}` /
+`{{variant_noun}}` are the requested count and "variant"/"variants";
+`{{variant_list}}` is a numbered label list for that prompt
+(`conservative` / `native` / `alternative` on `correct`; `{id}-1` … `{id}-n`
+otherwise). The composer prepends a JSON-only output contract (language,
+count, delimiters). Task templates only need the unique instruction plus
+`{{text}}`. When you set `template` (new prompt or template override), it
+must contain `{{text}}`. Overlays that omit `template` keep the builtin.
+When set, `label` and `description` must be strings.
+
+`prompts` as a map adds or overrides builtins and keeps the rest of the
+catalog (older versions treated a map as a full replacement; use a list
+for that). Overlaying a builtin merges fields: omitted `template` /
+`label` / `description` stay. New map ids still need a `template`. If you
+set `id`, it must equal the map key. `prompts` as a list still replaces
+the catalog. Optional per-prompt `n_variants` (1–9) overrides the global
+count. `default_prompt` selects the id for `:Laler` / `run` until a
+successful run remembers another prompt (`remember_last_prompt`).
+
+Add (map; builtins kept)~
+>lua
+  require("laler").setup({
+    default_prompt = "conservative",
+    prompts = {
+      conservative = {
+        label = "Conservative",
+        n_variants = 1,
+        template = [[Conservative correction: minimal edits, same meaning.
+
+{{text}}]],
+      },
+    },
+  })
+<
+
+Override a builtin (map; omitted fields stay)~
+>lua
+  require("laler").setup({
+    prompts = {
+      correct = { n_variants = 1 },
+      concise = {
+        template = [[Make the passage shorter. Keep technical terms.
+
+{{text}}]],
+      },
+    },
+  })
+<
+
+Replace the catalog (list)~
+>lua
+  require("laler").setup({
+    default_prompt = "plain",
+    prompts = {
+      { id = "plain", template = [[Fix grammar only.
+
+{{text}}]] },
+    },
+  })
+<
 
 Expected model JSON~
 >json

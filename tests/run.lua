@@ -65,6 +65,8 @@ do
   assert_true(out:find("Lang=en", 1, true) ~= nil, "language filled")
   assert_true(out:find("FT=markdown", 1, true) ~= nil, "filetype filled")
   assert_true(out:find("N=3", 1, true) ~= nil, "n_variants filled")
+  assert_true(out:find("exactly 3 variants when possible", 1, true) ~= nil, "preamble plural variants")
+  assert_true(out:find(",\n    ...", 1, true) ~= nil, "n>1 JSON sketch has extra-item ellipsis")
   assert_true(out:find("<<<LALER_TEXT>>>", 1, true) ~= nil, "delimiter open")
   assert_true(out:find("<<<END_LALER_TEXT>>>", 1, true) ~= nil, "delimiter close")
   assert_true(out:find("\nhello\n", 1, true) ~= nil, "text inside delimiters")
@@ -482,6 +484,8 @@ do
   assert_true(out:find("1. conservative", 1, true) ~= nil, "n=2 has conservative")
   assert_true(out:find("2. native", 1, true) ~= nil, "n=2 has native")
   assert_true(out:find("3. alternative", 1, true) == nil, "n=2 has no third variant")
+  assert_true(out:find("Provide 2 corrected variants:", 1, true) ~= nil, "correct body plural n=2")
+  assert_true(out:find("Provide 2 corrected variant:", 1, true) == nil, "correct body not singular for n=2")
 end
 
 -- config integer validation
@@ -1511,6 +1515,16 @@ do
   assert_true(not ok, "duplicate prompt id errors")
   assert_true(tostring(err):find("duplicate", 1, true) ~= nil, "duplicate id message")
   assert_true(tostring(err):find("laler:", 1, true) ~= nil, "duplicate id laler: prefix")
+
+  local config = require("laler.config")
+  ok, err = config.validate({
+    prompts = {
+      { id = "a", template = "t {{text}}" },
+      { id = "a", template = "u {{text}}" },
+    },
+  })
+  assert_true(not ok, "validate duplicate prompt id")
+  assert_true(type(err) == "string" and err:find("duplicate", 1, true) ~= nil, "validate duplicate id message")
 end
 
 -- oversize range rejected
@@ -2948,6 +2962,437 @@ do
   jobs2.cbs[1].on_exit(true, '{"variants":[{"text":"FRESH"}]}', "", 0)
   assert_eq(#reviews2, 1, "fresh callback after rebind used")
   assert_eq(reviews2[1], "FRESH", "fresh text after rebind")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- prompt n_variants overrides global; catalog map merge / list replace
+do
+  local composer = require("laler.prompt.composer")
+  local catalog_mod = require("laler.prompt.catalog")
+  local config = require("laler.config")
+
+  local out = composer:compose(catalog_mod.new({}):get("correct"), {
+    text = "hi",
+    language = "en",
+    filetype = "",
+    n_variants = 1,
+  })
+  assert_true(out:find("1. conservative", 1, true) ~= nil, "n=1 has conservative")
+  assert_true(out:find("2. native", 1, true) == nil, "n=1 has no native")
+  assert_true(out:find("exactly 1 variant when possible", 1, true) ~= nil, "preamble singular variant")
+  assert_true(out:find("exactly 1 variants", 1, true) == nil, "preamble not plural for n=1")
+  assert_true(out:find("Provide 1 corrected variant:", 1, true) ~= nil, "correct body singular n=1")
+  assert_true(out:find("1 corrected variants", 1, true) == nil, "correct body not plural for n=1")
+  assert_true(out:find(",\n    ...", 1, true) == nil, "n=1 JSON sketch has no extra-item ellipsis")
+
+  local ctx_omit = { text = "hi", language = "en", filetype = "" }
+  local from_prompt = composer:compose({
+    id = "x",
+    template = "N={{n_variants}}\n{{text}}",
+    n_variants = 1,
+  }, ctx_omit)
+  assert_true(from_prompt:find("N=1", 1, true) ~= nil, "compose uses prompt.n_variants when ctx omits it")
+  assert_true(from_prompt:find("exactly 1 variant when possible", 1, true) ~= nil, "prompt n_variants singular preamble")
+  assert_true(from_prompt:find(",\n    ...", 1, true) == nil, "prompt n_variants n=1 sketch has no ellipsis")
+  local ctx_wins = composer:compose({
+    id = "x",
+    template = "N={{n_variants}}\n{{text}}",
+    n_variants = 1,
+  }, { text = "hi", language = "en", filetype = "", n_variants = 3 })
+  assert_true(ctx_wins:find("N=3", 1, true) ~= nil, "ctx.n_variants wins over prompt.n_variants")
+  local from_default = composer:compose({
+    id = "x",
+    template = "N={{n_variants}}\n{{text}}",
+  }, ctx_omit)
+  assert_true(from_default:find("N=3", 1, true) ~= nil, "compose defaults n_variants to 3")
+
+  local ctx1 = { text = "hi", language = "en", filetype = "", n_variants = 1 }
+  local ctx3 = { text = "hi", language = "en", filetype = "", n_variants = 3 }
+  local builtins = catalog_mod.new({})
+  for _, id in ipairs({ "formal", "casual", "concise" }) do
+    local one = composer:compose(builtins:get(id), ctx1)
+    assert_true(one:find("Provide 1 variant:", 1, true) ~= nil, id .. " body singular n=1")
+    assert_true(one:find("1 variants", 1, true) == nil, id .. " body not plural for n=1")
+    assert_true(one:find("etc.", 1, true) == nil, id .. " n=1 has no etc.")
+    assert_true(one:find(id .. "-1", 1, true) ~= nil, id .. " n=1 has " .. id .. "-1")
+    assert_true(one:find(id .. "-2", 1, true) == nil, id .. " n=1 has no " .. id .. "-2")
+    assert_true(one:find("1. conservative", 1, true) == nil, id .. " n=1 does not use correct labels")
+    local many = composer:compose(builtins:get(id), ctx3)
+    assert_true(many:find("Provide 3 variants:", 1, true) ~= nil, id .. " body plural n=3")
+    assert_true(many:find("Provide 3 variant:", 1, true) == nil, id .. " body not singular for n=3")
+    assert_true(many:find("etc.", 1, true) == nil, id .. " n=3 has no etc.")
+    assert_true(many:find(id .. "-1", 1, true) ~= nil, id .. " n=3 has " .. id .. "-1")
+    assert_true(many:find(id .. "-2", 1, true) ~= nil, id .. " n=3 has " .. id .. "-2")
+    assert_true(many:find(id .. "-3", 1, true) ~= nil, id .. " n=3 has " .. id .. "-3")
+    assert_true(many:find(id .. "-4", 1, true) == nil, id .. " n=3 has no " .. id .. "-4")
+    assert_true(many:find("1. conservative", 1, true) == nil, id .. " n=3 does not use correct labels")
+  end
+
+  local custom_list = composer:compose({
+    id = "plain",
+    template = "List:\n{{variant_list}}\n{{text}}",
+  }, ctx3)
+  assert_true(custom_list:find('1. plain-1 (label: "plain-1")', 1, true) ~= nil, "custom variant_list uses id-1")
+  assert_true(custom_list:find("plain-3", 1, true) ~= nil, "custom variant_list uses id-n")
+  assert_true(custom_list:find("plain-4", 1, true) == nil, "custom variant_list stops at n")
+  assert_true(custom_list:find("1. conservative", 1, true) == nil, "custom variant_list not correct specs")
+  local correct_named = composer:compose(builtins:get("correct"), ctx3)
+  assert_true(correct_named:find("1. conservative", 1, true) ~= nil, "correct n=3 keeps conservative")
+  assert_true(correct_named:find("correct-1", 1, true) == nil, "correct does not use id-n labels")
+
+  local overlay_n1 = catalog_mod.new({
+    prompts = { correct = { n_variants = 1 } },
+  })
+  local overlay_out = composer:compose(overlay_n1:get("correct"), {
+    text = "hi",
+    language = "en",
+    filetype = "",
+    n_variants = overlay_n1:get("correct").n_variants,
+  })
+  assert_true(overlay_out:find("Provide 1 corrected variant:", 1, true) ~= nil, "overlay n=1 correct body singular")
+  assert_true(overlay_out:find("1 corrected variants", 1, true) == nil, "overlay n=1 correct body not plural")
+  assert_true(overlay_out:find("exactly 1 variant when possible", 1, true) ~= nil, "overlay n=1 preamble singular")
+
+  local merged = catalog_mod.new({
+    prompts = {
+      conservative = {
+        label = "Conservative",
+        template = "Conservative correction.\n{{text}}",
+        n_variants = 1,
+      },
+      zebra = { template = "Z {{text}}" },
+      apple = { template = "A {{text}}" },
+    },
+    default_prompt = "conservative",
+  })
+  assert_true(merged:get("correct") ~= nil, "map merge keeps builtin correct")
+  assert_true(merged:get("formal") ~= nil, "map merge keeps builtin formal")
+  assert_true(merged:get("conservative") ~= nil, "map merge adds conservative")
+  assert_eq(merged:get("conservative").n_variants, 1, "merged prompt keeps n_variants")
+  assert_eq(merged:default_id(), "conservative", "default_prompt extra id")
+  local ids = {}
+  for _, p in ipairs(merged:list()) do
+    ids[#ids + 1] = p.id
+  end
+  assert_eq(ids[1], "correct", "builtins stay first")
+  local apple_i, zebra_i
+  for i, id in ipairs(ids) do
+    if id == "apple" then
+      apple_i = i
+    end
+    if id == "zebra" then
+      zebra_i = i
+    end
+  end
+  assert_true(apple_i ~= nil and zebra_i ~= nil, "extras present")
+  assert_true(apple_i < zebra_i, "new map ids appended sorted")
+
+  local overridden = catalog_mod.new({
+    prompts = {
+      correct = { label = "Correct+", template = "override {{text}}" },
+    },
+  })
+  assert_eq(overridden:get("correct").template, "override {{text}}", "map overrides builtin")
+  assert_eq(overridden:list()[1].id, "correct", "override keeps builtin position")
+  assert_true(overridden:get("casual") ~= nil, "override still has other builtins")
+  assert_eq(
+    overridden:get("correct").description,
+    "Grammar + native-speaker fluency",
+    "template overlay keeps builtin description"
+  )
+
+  local partial = catalog_mod.new({
+    prompts = { correct = { n_variants = 1 } },
+  })
+  local builtin_correct
+  for _, p in ipairs(catalog_mod.builtin()) do
+    if p.id == "correct" then
+      builtin_correct = p
+      break
+    end
+  end
+  assert_true(builtin_correct ~= nil, "found builtin correct")
+  assert_eq(partial:get("correct").n_variants, 1, "partial overlay sets n_variants")
+  assert_eq(partial:get("correct").label, "Correct", "partial overlay keeps builtin label")
+  assert_eq(
+    partial:get("correct").description,
+    "Grammar + native-speaker fluency",
+    "partial overlay keeps builtin description"
+  )
+  assert_eq(partial:get("correct").template, builtin_correct.template, "partial overlay keeps builtin template")
+
+  local tmpl_only = catalog_mod.new({
+    prompts = { concise = { template = "short {{text}}" } },
+  })
+  assert_eq(tmpl_only:get("concise").template, "short {{text}}", "template-only overlay")
+  assert_eq(tmpl_only:get("concise").label, "Concise", "template-only overlay keeps builtin label")
+  assert_eq(tmpl_only:get("concise").description, "Shorter and clearer", "template-only overlay keeps builtin description")
+
+  local replaced = catalog_mod.new({
+    prompts = { { id = "only", template = "t {{text}}" } },
+  })
+  assert_true(replaced:get("only") ~= nil, "list replace has only")
+  assert_true(replaced:get("correct") == nil, "list replace drops builtins")
+
+  local ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { { id = "x", template = "t {{text}}", n_variants = 0 } },
+    })
+  end)
+  assert_true(not ok, "catalog rejects prompt n_variants 0")
+  assert_true(tostring(err):find("n_variants", 1, true) ~= nil, "catalog n_variants message")
+
+  ok, err = config.validate({
+    prompts = { { id = "x", template = "t {{text}}", n_variants = 10 } },
+  })
+  assert_true(not ok, "validate rejects prompt n_variants 10")
+  assert_true(type(err) == "string" and err:find("n_variants", 1, true) ~= nil, "validate prompt n_variants message")
+
+  ok, err = config.validate({
+    prompts = {
+      conservative = { template = "t {{text}}", n_variants = 1 },
+    },
+    default_prompt = "conservative",
+  })
+  assert_true(ok, "validate map extra default_prompt")
+
+  ok, err = config.validate({
+    prompts = {
+      conservative = { template = "t {{text}}", n_variants = 1 },
+    },
+    default_prompt = "correct",
+  })
+  assert_true(ok, "validate map keeps builtin default_prompt")
+
+  ok, err = config.validate({
+    prompts = { { id = "only", template = "t {{text}}" } },
+    default_prompt = "correct",
+  })
+  assert_true(not ok, "validate list replace unknown default_prompt")
+
+  ok, err = config.validate({
+    prompts = { correct = { n_variants = 1 } },
+  })
+  assert_true(ok, "validate partial overlay n_variants")
+
+  ok, err = config.validate({
+    prompts = { newbie = { n_variants = 1 } },
+  })
+  assert_true(not ok, "validate new map id requires template")
+  assert_true(type(err) == "string" and err:find("template", 1, true) ~= nil, "validate new id template message")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { newbie = { n_variants = 1 } },
+    })
+  end)
+  assert_true(not ok, "catalog new map id requires template")
+  assert_true(tostring(err):find("template", 1, true) ~= nil, "catalog new id template message")
+
+  ok, err = config.validate({
+    prompts = { { id = "x", template = "t {{text}}", n_variants = 1.5 } },
+  })
+  assert_true(not ok, "validate rejects prompt n_variants 1.5")
+  assert_true(type(err) == "string" and err:find("n_variants", 1, true) ~= nil, "validate prompt n_variants 1.5 message")
+
+  ok, err = config.validate({
+    prompts = { correct = { n_variants = 1.5 } },
+  })
+  assert_true(not ok, "validate rejects overlay n_variants 1.5")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { correct = { n_variants = 1.5 } },
+    })
+  end)
+  assert_true(not ok, "catalog rejects overlay n_variants 1.5")
+  assert_true(tostring(err):find("n_variants", 1, true) ~= nil, "catalog overlay n_variants 1.5 message")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { correct = { id = "foo", template = "t {{text}}" } },
+    })
+  end)
+  assert_true(not ok, "catalog rejects map key vs id mismatch")
+  assert_true(tostring(err):find("must match id", 1, true) ~= nil, "catalog mismatch message")
+
+  ok, err = config.validate({
+    prompts = { correct = { id = "foo", template = "t {{text}}" } },
+  })
+  assert_true(not ok, "validate rejects map key vs id mismatch")
+  assert_true(type(err) == "string" and err:find("must match id", 1, true) ~= nil, "validate mismatch message")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = {
+        a = { id = "same", template = "t {{text}}" },
+        b = { id = "same", template = "u {{text}}" },
+      },
+    })
+  end)
+  assert_true(not ok, "catalog rejects two map keys resolving to same id")
+  assert_true(
+    tostring(err):find("must match id", 1, true) ~= nil or tostring(err):find("duplicate", 1, true) ~= nil,
+    "catalog two-key same id message"
+  )
+
+  ok, err = config.validate({
+    prompts = {
+      a = { id = "same", template = "t {{text}}" },
+      b = { id = "same", template = "u {{text}}" },
+    },
+  })
+  assert_true(not ok, "validate rejects two map keys resolving to same id")
+  assert_true(
+    type(err) == "string" and (err:find("must match id", 1, true) ~= nil or err:find("duplicate", 1, true) ~= nil),
+    "validate two-key same id message"
+  )
+
+  ok, err = config.validate({
+    prompts = { correct = { description = { "x" } } },
+  })
+  assert_true(not ok, "validate rejects table description")
+  assert_true(type(err) == "string" and err:find("description", 1, true) ~= nil, "validate description type message")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { correct = { description = { "x" } } },
+    })
+  end)
+  assert_true(not ok, "catalog rejects table description")
+  assert_true(tostring(err):find("description", 1, true) ~= nil, "catalog description type message")
+
+  ok, err = config.validate({
+    prompts = { correct = { label = 1 } },
+  })
+  assert_true(not ok, "validate rejects numeric label")
+  assert_true(type(err) == "string" and err:find("label", 1, true) ~= nil, "validate label type message")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { correct = { label = 1 } },
+    })
+  end)
+  assert_true(not ok, "catalog rejects numeric label")
+  assert_true(tostring(err):find("label", 1, true) ~= nil, "catalog label type message")
+
+  ok, err = config.validate({
+    prompts = { { id = "x", template = "t {{text}}", label = true } },
+  })
+  assert_true(not ok, "validate list rejects boolean label")
+
+  ok, err = config.validate({
+    prompts = { newbie = { template = "no placeholder" } },
+  })
+  assert_true(not ok, "validate new template requires {{text}}")
+  assert_true(type(err) == "string" and err:find("{{text}}", 1, true) ~= nil, "validate {{text}} message")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { newbie = { template = "no placeholder" } },
+    })
+  end)
+  assert_true(not ok, "catalog new template requires {{text}}")
+  assert_true(tostring(err):find("{{text}}", 1, true) ~= nil, "catalog {{text}} message")
+
+  ok, err = config.validate({
+    prompts = { correct = { template = "override without passage" } },
+  })
+  assert_true(not ok, "validate overlay template requires {{text}}")
+
+  ok, err = pcall(function()
+    catalog_mod.new({
+      prompts = { correct = { template = "override without passage" } },
+    })
+  end)
+  assert_true(not ok, "catalog overlay template requires {{text}}")
+  assert_true(tostring(err):find("{{text}}", 1, true) ~= nil, "catalog overlay {{text}} message")
+
+  ok, err = config.validate({
+    prompts = { { id = "x", template = "hello" } },
+  })
+  assert_true(not ok, "validate list template requires {{text}}")
+
+  ok, err = config.validate({
+    prompts = { correct = { n_variants = 1 } },
+  })
+  assert_true(ok, "validate overlay omitting template still ok after {{text}} rule")
+
+  local util = require("laler.util")
+  assert_true(util.is_list({}), "empty table is a list")
+  assert_true(util.is_list({ { id = "a" } }), "array of prompts is a list")
+  assert_true(not util.is_list({ correct = { n_variants = 1 } }), "prompt map is not a list")
+  assert_true(not util.is_list({ { id = "a" }, extra = true }), "mixed table is not a list")
+  assert_true(not util.is_list({ [2] = { id = "a" } }), "hole is not a list")
+  assert_true(not util.is_list("x"), "string is not a list")
+
+  local session = require("laler.session")
+  local got_n
+  local jobs = {}
+  function jobs:start() end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+  session.bind({
+    config = { language = "en", n_variants = 3 },
+    catalog = catalog_mod.new({
+      prompts = {
+        { id = "fast", template = "t {{text}}", n_variants = 1 },
+        { id = "slow", template = "t {{text}}" },
+      },
+    }),
+    composer = {
+      compose = function(_, _, ctx)
+        got_n = ctx.n_variants
+        return "composed"
+      end,
+    },
+    llm = {
+      name = "fake",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = {
+      open_loading = function() end,
+      show_review = function() end,
+      show_error = function() end,
+      close = function() end,
+    },
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  session._start_job({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }, "fast")
+  assert_eq(got_n, 1, "session uses prompt n_variants over global")
+  session._start_job({
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }, "slow")
+  assert_eq(got_n, 3, "session uses global n_variants when prompt omits it")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 

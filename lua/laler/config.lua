@@ -1,4 +1,37 @@
+local util = require("laler.util")
+
 local M = {}
+
+---@param n any
+---@return boolean
+local function valid_n_variants(n)
+  return type(n) == "number" and n >= 1 and n <= 9 and math.floor(n) == n
+end
+
+---@param p table
+---@param pid string
+---@param require_template boolean
+---@return boolean, string?
+local function validate_prompt_fields(p, pid, require_template)
+  if require_template or p.template ~= nil then
+    if type(p.template) ~= "string" then
+      return false, "prompt '" .. pid .. "' must have a string template"
+    end
+    if not p.template:find("{{text}}", 1, true) then
+      return false, "prompt '" .. pid .. "' template must include {{text}}"
+    end
+  end
+  if p.label ~= nil and type(p.label) ~= "string" then
+    return false, "prompt '" .. pid .. "' label must be a string"
+  end
+  if p.description ~= nil and type(p.description) ~= "string" then
+    return false, "prompt '" .. pid .. "' description must be a string"
+  end
+  if p.n_variants ~= nil and not valid_n_variants(p.n_variants) then
+    return false, "prompt '" .. pid .. "' n_variants must be an integer between 1 and 9"
+  end
+  return true
+end
 
 ---@return table
 function M.defaults()
@@ -31,12 +64,7 @@ function M.validate(cfg)
     return false, "config must be a table"
   end
   if cfg.n_variants ~= nil then
-    if
-      type(cfg.n_variants) ~= "number"
-      or cfg.n_variants < 1
-      or cfg.n_variants > 9
-      or math.floor(cfg.n_variants) ~= cfg.n_variants
-    then
+    if not valid_n_variants(cfg.n_variants) then
       return false, "n_variants must be an integer between 1 and 9"
     end
   end
@@ -74,13 +102,9 @@ function M.validate(cfg)
       return false, "prompts must be a table"
     end
     local n = 0
-    local is_list = false
-    if vim.islist then
-      is_list = vim.islist(cfg.prompts)
-    else
-      is_list = cfg.prompts[1] ~= nil
-    end
-    if is_list then
+    local seen = {}
+    local prompts_list = util.is_list(cfg.prompts)
+    if prompts_list then
       for i, p in ipairs(cfg.prompts) do
         n = n + 1
         if type(p) ~= "table" then
@@ -92,15 +116,27 @@ function M.validate(cfg)
         if p.id:find("%s") then
           return false, "prompt id must not contain whitespace"
         end
-        if type(p.template) ~= "string" then
-          return false, "prompt '" .. p.id .. "' must have a string template"
+        if seen[p.id] then
+          return false, "duplicate prompt id '" .. p.id .. "'"
+        end
+        seen[p.id] = true
+        local pok, perr = validate_prompt_fields(p, p.id, true)
+        if not pok then
+          return false, perr
         end
       end
     else
+      local builtin_ids = {}
+      for _, bp in ipairs(require("laler.prompt.catalog").builtin()) do
+        builtin_ids[bp.id] = true
+      end
       for id, p in pairs(cfg.prompts) do
         n = n + 1
         if type(p) ~= "table" then
           return false, "prompt '" .. tostring(id) .. "' must be a table"
+        end
+        if p.id ~= nil and p.id ~= id then
+          return false, "prompt map key '" .. tostring(id) .. "' must match id '" .. tostring(p.id) .. "'"
         end
         local pid = p.id or id
         if type(pid) ~= "string" or pid == "" then
@@ -109,8 +145,13 @@ function M.validate(cfg)
         if pid:find("%s") then
           return false, "prompt id must not contain whitespace"
         end
-        if type(p.template) ~= "string" then
-          return false, "prompt '" .. tostring(pid) .. "' must have a string template"
+        if seen[pid] then
+          return false, "duplicate prompt id '" .. pid .. "'"
+        end
+        seen[pid] = true
+        local pok, perr = validate_prompt_fields(p, pid, not builtin_ids[pid])
+        if not pok then
+          return false, perr
         end
       end
     end
@@ -123,20 +164,18 @@ function M.validate(cfg)
       return false, "unknown default_prompt"
     end
     local known = {}
-    if cfg.prompts ~= nil then
-      local is_list = false
-      if vim.islist then
-        is_list = vim.islist(cfg.prompts)
-      else
-        is_list = cfg.prompts[1] ~= nil
-      end
-      if is_list then
-        for _, p in ipairs(cfg.prompts) do
-          if type(p) == "table" and type(p.id) == "string" then
-            known[p.id] = true
-          end
+    local prompts_list = cfg.prompts ~= nil and util.is_list(cfg.prompts)
+    if cfg.prompts ~= nil and prompts_list then
+      for _, p in ipairs(cfg.prompts) do
+        if type(p) == "table" and type(p.id) == "string" then
+          known[p.id] = true
         end
-      else
+      end
+    else
+      for _, p in ipairs(require("laler.prompt.catalog").builtin()) do
+        known[p.id] = true
+      end
+      if cfg.prompts ~= nil then
         for id, p in pairs(cfg.prompts) do
           if type(p) == "table" then
             local pid = p.id or id
@@ -145,10 +184,6 @@ function M.validate(cfg)
             end
           end
         end
-      end
-    else
-      for _, p in ipairs(require("laler.prompt.catalog").builtin()) do
-        known[p.id] = true
       end
     end
     if not known[cfg.default_prompt] then

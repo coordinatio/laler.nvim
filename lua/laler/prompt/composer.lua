@@ -14,8 +14,7 @@ Return ONLY a single JSON object (no markdown fences, no prose before or after i
       "label": "short-name",
       "text": "<corrected passage>",
       "notes": ["brief learning note"]
-    },
-    ...
+    }{{variants_more}}
   ]
 }
 
@@ -23,7 +22,7 @@ Hard rules:
 - "text" must contain ONLY the rewritten passage from {{text_open}}…{{text_close}}.
 - Never copy these instructions, the JSON schema, labels like OUTPUT FORMAT, or the delimiters into "text".
 - Do not change meaning. Preserve markdown and code fences inside the passage.
-- Language focus: {{language}}. Provide exactly {{n_variants}} variants when possible.
+- Language focus: {{language}}. Provide exactly {{n_variants}} {{variant_noun}} when possible.
 - Each notes entry teaches why a change improves the language.
 - Valid JSON: one of each key per variant. Put every note in that single "notes" array.
 ]]
@@ -35,19 +34,27 @@ local VARIANT_SPECS = {
 }
 
 ---@param n integer
+---@param prompt laler.PromptDef
 ---@return string
-local function variant_list(n)
+local function variant_list(n, prompt)
   local lines = {}
+  local id = type(prompt) == "table" and type(prompt.id) == "string" and prompt.id ~= "" and prompt.id or "variant"
+  local named = id == "correct"
   for i = 1, n do
-    local spec = VARIANT_SPECS[i]
     local label, desc
-    if spec then
-      label, desc = spec[1], spec[2]
+    if named then
+      local spec = VARIANT_SPECS[i]
+      if spec then
+        label, desc = spec[1], spec[2]
+      else
+        label = "alternative-" .. i
+        desc = "a valid alternative phrasing"
+      end
+      lines[#lines + 1] = string.format('%d. %s — %s (label: "%s")', i, label, desc, label)
     else
-      label = "alternative-" .. i
-      desc = "a valid alternative phrasing"
+      label = id .. "-" .. i
+      lines[#lines + 1] = string.format('%d. %s (label: "%s")', i, label, label)
     end
-    lines[#lines + 1] = string.format('%d. %s — %s (label: "%s")', i, label, desc, label)
   end
   return table.concat(lines, "\n")
 end
@@ -118,16 +125,20 @@ function M:compose(prompt, ctx)
     ctx.text,
     close,
   }, "\n")
+  local n = ctx.n_variants or prompt.n_variants or 3
   local map = {
     text = delimited,
     language = tostring(ctx.language or "en"),
     filetype = tostring(ctx.filetype or ""),
-    n_variants = tostring(ctx.n_variants),
+    n_variants = tostring(n),
+    variant_noun = n == 1 and "variant" or "variants",
     text_open = open,
     text_close = close,
-    variant_list = variant_list(ctx.n_variants or 3),
+    variant_list = variant_list(n, prompt),
   }
-  local preamble = fill(PREAMBLE, map)
+  local preamble = fill(PREAMBLE, vim.tbl_extend("force", map, {
+    variants_more = n == 1 and "" or ",\n    ...",
+  }))
   local body = fill(prompt.template, map)
   return preamble .. "\n" .. body .. "\n\nJSON only:"
 end

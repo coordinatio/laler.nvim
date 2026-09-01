@@ -48,12 +48,13 @@
 ---@field label string
 ---@field description? string
 ---@field template string
+---@field n_variants? integer overrides global n_variants when set
 
 ---@class laler.ComposeCtx
 ---@field text string
 ---@field language string
 ---@field filetype string
----@field n_variants integer
+---@field n_variants? integer resolved count; composer uses prompt.n_variants then 3 if omitted
 
 ---@class laler.ReviewState
 ---@field prompt_id string

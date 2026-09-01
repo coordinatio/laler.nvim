@@ -67,7 +67,7 @@ require("laler").setup({
   picker = nil, -- "fzf-lua" | "telescope" | "vim_ui" | nil = auto
   timeout_ms = 60000,
   mappings = { run = "<leader>ll", pick = "<leader>lL", buffer = "<leader>la", pick_buffer = "<leader>lA" }, -- or false
-  -- prompts = { ... }, -- override builtins
+  -- prompts = { ... }, -- map: add/override builtins; list: replace catalog
 })
 ```
 
@@ -191,7 +191,63 @@ When `model` is set, each of those invocations also gets `--model NAME` (for cur
 | `casual` | More conversational |
 | `concise` | Shorter and clearer |
 
-Templates support `{{text}}`, `{{language}}`, `{{filetype}}`, `{{n_variants}}`, `{{text_open}}`, `{{text_close}}`, `{{variant_list}}`. `{{text}}` is the passage inside unique delimiters; `{{text_open}}` / `{{text_close}}` are those markers; `{{variant_list}}` lists requested variant labels. Output must be JSON with `variants[{label,text,notes}]`.
+Templates support `{{text}}`, `{{language}}`, `{{filetype}}`, `{{n_variants}}`, `{{variant_noun}}`, `{{text_open}}`, `{{text_close}}`, `{{variant_list}}`. `{{text}}` is the passage inside unique delimiters; `{{text_open}}` / `{{text_close}}` are those markers; `{{n_variants}}` / `{{variant_noun}}` are the requested count and “variant”/“variants”; `{{variant_list}}` is a numbered label list for that prompt (`conservative` / `native` / `alternative` on `correct`; `{id}-1`…`{id}-n` otherwise). Output must be JSON with `variants[{label,text,notes}]`.
+
+The composer already prepends that JSON contract plus language, variant count, and delimiter rules. A custom task template only needs the instruction that is unique to the prompt and `{{text}}`. When you set `template` (a new prompt or a template override), it must contain `{{text}}`. Overlaying other fields without `template` (for example `{ correct = { n_variants = 1 } }`) keeps the builtin template. `label` and `description`, when set, must be strings.
+
+## Custom prompts
+
+A **map** adds or overrides prompts and keeps the builtins. (Older versions treated a map as a full replacement; pass a **list** if you still want that.) Overlaying a builtin merges fields: omitted `template` / `label` / `description` stay. New map ids still need a `template`. If you set `id`, it must equal the map key. A **list** replaces the catalog and drops builtins. `n_variants` on a prompt (1–9) overrides the global count. `default_prompt` is the id used by `run` / `:Laler` until a successful run remembers another prompt (`remember_last_prompt`).
+
+Add a prompt (map merge):
+
+```lua
+require("laler").setup({
+  default_prompt = "conservative",
+  prompts = {
+    conservative = {
+      label = "Conservative",
+      description = "Grammar + native-speaker fluency (minimal edits only)",
+      n_variants = 1,
+      template = [[Conservative correction: minimal edits, same meaning.
+
+{{text}}]],
+    },
+  },
+})
+```
+
+Override a builtin (map; omitted fields stay). `{ correct = { n_variants = 1 } }` keeps the builtin template, label, and description:
+
+```lua
+require("laler").setup({
+  prompts = {
+    correct = { n_variants = 1 },
+    concise = {
+      template = [[Make the passage shorter. Keep technical terms.
+
+{{text}}]],
+    },
+  },
+})
+```
+
+Replace the catalog (list form; builtins are dropped):
+
+```lua
+require("laler").setup({
+  default_prompt = "plain",
+  prompts = {
+    {
+      id = "plain",
+      label = "Plain",
+      template = [[Fix grammar only.
+
+{{text}}]],
+    },
+  },
+})
+```
 
 ## Review keys
 

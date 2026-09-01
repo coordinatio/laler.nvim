@@ -308,7 +308,7 @@ function M._start_job(range, prompt_id)
       text = range.text,
       language = c.config.language or "en",
       filetype = ft,
-      n_variants = c.config.n_variants or 3,
+      n_variants = prompt.n_variants or c.config.n_variants or 3,
     })
   end)
   if not ok_compose then
