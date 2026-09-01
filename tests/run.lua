@@ -580,6 +580,7 @@ do
   local pmodel, pi_i = model_value(spec.args)
   assert_eq(pmodel, "alibaba-cloud/qwen3.8-flash", "pi --model value")
   assert_true(vim.tbl_contains(spec.args, "--no-skills"), "pi model keeps builtin flags")
+  assert_true(not vim.tbl_contains(spec.args, "--no-extensions"), "pi model omits --no-extensions for catalog lookup")
   assert_eq(spec.stdin, "hello", "pi model stdin")
   assert_true(pi_i ~= nil, "pi --model index")
 
@@ -706,6 +707,7 @@ do
   assert_eq(flag_value(spec.args, "--thinking"), "off", "pi --thinking off")
   assert_eq(flag_value(spec.args, "--model"), "alibaba-cloud/qwen3.8-flash", "pi model with thinking off")
   assert_true(vim.tbl_contains(spec.args, "--no-skills"), "pi thinking keeps builtin flags")
+  assert_true(not vim.tbl_contains(spec.args, "--no-extensions"), "pi model+thinking omits --no-extensions")
   local think_i, model_i
   for i, a in ipairs(spec.args) do
     if a == "--thinking" then
@@ -825,6 +827,7 @@ do
   assert_eq(flag_value(spec.args, "--model"), "alibaba-cloud/qwen3.8-flash", "setup llm --model")
   assert_eq(flag_value(spec.args, "--thinking"), "off", "setup llm --thinking off")
   assert_true(vim.tbl_contains(spec.args, "--no-skills"), "setup llm keeps pi flags")
+  assert_true(not vim.tbl_contains(spec.args, "--no-extensions"), "setup llm omits --no-extensions with model")
 end
 
 -- job generation helper

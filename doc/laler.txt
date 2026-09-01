@@ -95,8 +95,9 @@ ADAPTERS                                                        *laler-adapters*
 
 Built-ins (tools disabled so agents do not edit files):
 
-  pi         `pi -p --no-tools --no-session --no-context-files --no-extensions
-             --no-skills`
+  pi         `pi -p --no-tools --no-session --no-context-files --no-skills`
+             (`--no-extensions` when no `model`; pi needs extensions to resolve
+             `provider/model` IDs)
   cursor     `agent` or `cursor-agent` with `-p --mode ask --output-format text
              --trust --sandbox enabled` (ask is read-only; workspace trust;
              not `--force`)

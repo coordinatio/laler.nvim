@@ -176,7 +176,7 @@ Prompt delivery:
 
 Built-in adapters disable agent tools so they do not edit files:
 
-- **pi:** `-p --no-tools --no-session --no-context-files --no-extensions --no-skills`
+- **pi:** `-p --no-tools --no-session --no-context-files --no-skills` (and `--no-extensions` when no `model` is set; pi needs extensions to resolve `provider/model` IDs)
 - **cursor:** `-p --mode ask --output-format text --trust --sandbox enabled` (ask is read-only; workspace trust for headless; not `--force`)
 - **opencode:** `run --format default --pure`, plus `OPENCODE_PERMISSION` deny-all (no `--permissions` flag; that option is not on `run`)
 

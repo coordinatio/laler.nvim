@@ -19,9 +19,12 @@ function M.new(opts)
       "--no-tools",
       "--no-session",
       "--no-context-files",
-      "--no-extensions",
       "--no-skills",
     }
+    -- pi cannot resolve provider/model IDs with --no-extensions (catalog lives in extensions).
+    if not (type(model) == "string" and model ~= "") then
+      args[#args + 1] = "--no-extensions"
+    end
     argv.with_thinking(args, thinking)
     argv.with_model(args, model)
     return {
