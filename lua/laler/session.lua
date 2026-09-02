@@ -362,10 +362,28 @@ function M._start_job(range, prompt_id)
           return
         end
 
-        local parsed_ok, result = c.parser:parse(stdout)
+        local text = stdout or ""
+        if c.llm.unwrap_stdout then
+          local uok, unwrapped = pcall(function()
+            return c.llm:unwrap_stdout(text)
+          end)
+          if not uok then
+            active.raw = text
+            c.view:show_error(tostring(unwrapped), text, make_callbacks())
+            return
+          end
+          if type(unwrapped) ~= "string" then
+            active.raw = text
+            c.view:show_error("invalid unwrapped output", text, make_callbacks())
+            return
+          end
+          text = unwrapped
+        end
+
+        local parsed_ok, result = c.parser:parse(text)
         if not parsed_ok then
-          active.raw = stdout
-          c.view:show_error(tostring(result), stdout, make_callbacks())
+          active.raw = text
+          c.view:show_error(tostring(result), text, make_callbacks())
           return
         end
 

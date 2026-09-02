@@ -33,12 +33,48 @@ local function validate_prompt_fields(p, pid, require_template)
   return true
 end
 
+--- Built-in openai adapter (`"openai"` or `{ name = "openai" }` without generic override fields).
+---@param adapter any
+---@return boolean
+local function openai_adapter_requires_model(adapter)
+  if adapter == "openai" then
+    return true
+  end
+  if type(adapter) ~= "table" or adapter.name ~= "openai" then
+    return false
+  end
+  if adapter.cmd ~= nil or adapter.build ~= nil or adapter.args ~= nil or adapter.env ~= nil or adapter.cwd ~= nil then
+    return false
+  end
+  return true
+end
+
+--- Trim in place; nil stays nil; whitespace-only is empty.
+---@param tbl table
+---@param key string
+---@param label string
+---@return boolean, string?
+local function require_trimmed(tbl, key, label)
+  local v = tbl[key]
+  if v == nil then
+    return true
+  end
+  if type(v) ~= "string" or vim.trim(v) == "" then
+    return false, label .. " must be a non-empty string"
+  end
+  tbl[key] = vim.trim(v)
+  return true
+end
+
 ---@return table
 function M.defaults()
   return {
     adapter = "pi",
     model = nil,
     thinking = nil,
+    base_url = nil,
+    api_key_env = nil,
+    api_key_file = nil,
     language = "en",
     n_variants = 3,
     default_prompt = "correct",
@@ -54,6 +90,11 @@ end
 ---@return table
 function M.merge(user)
   local cfg = vim.tbl_deep_extend("force", M.defaults(), user or {})
+  -- `tbl_deep_extend` reuses the caller's nested adapter table; copy so
+  -- `validate` can trim `adapter.model` / extras without mutating user opts.
+  if type(cfg.adapter) == "table" then
+    cfg.adapter = vim.tbl_extend("force", {}, cfg.adapter)
+  end
   return cfg
 end
 
@@ -76,14 +117,14 @@ function M.validate(cfg)
   if cfg.adapter ~= nil and type(cfg.adapter) ~= "string" and type(cfg.adapter) ~= "table" then
     return false, "adapter must be a string name or a table"
   end
-  if cfg.model ~= nil then
-    if type(cfg.model) ~= "string" or cfg.model == "" then
-      return false, "model must be a non-empty string"
-    end
+  local tok, terr = require_trimmed(cfg, "model", "model")
+  if not tok then
+    return false, terr
   end
-  if type(cfg.adapter) == "table" and cfg.adapter.model ~= nil then
-    if type(cfg.adapter.model) ~= "string" or cfg.adapter.model == "" then
-      return false, "adapter.model must be a non-empty string"
+  if type(cfg.adapter) == "table" then
+    tok, terr = require_trimmed(cfg.adapter, "model", "adapter.model")
+    if not tok then
+      return false, terr
     end
   end
   if cfg.thinking ~= nil and type(cfg.thinking) ~= "boolean" then
@@ -92,6 +133,31 @@ function M.validate(cfg)
   if type(cfg.adapter) == "table" and cfg.adapter.thinking ~= nil then
     if type(cfg.adapter.thinking) ~= "boolean" then
       return false, "adapter.thinking must be a boolean"
+    end
+  end
+  for _, key in ipairs({ "base_url", "api_key_env", "api_key_file" }) do
+    tok, terr = require_trimmed(cfg, key, key)
+    if not tok then
+      return false, terr
+    end
+  end
+  if type(cfg.adapter) == "table" then
+    for _, key in ipairs({ "base_url", "api_key_env", "api_key_file" }) do
+      tok, terr = require_trimmed(cfg.adapter, key, "adapter." .. key)
+      if not tok then
+        return false, terr
+      end
+    end
+  end
+  if openai_adapter_requires_model(cfg.adapter) then
+    local model
+    if type(cfg.adapter) == "table" and type(cfg.adapter.model) == "string" and cfg.adapter.model ~= "" then
+      model = cfg.adapter.model
+    elseif type(cfg.model) == "string" and cfg.model ~= "" then
+      model = cfg.model
+    end
+    if not model then
+      return false, "openai adapter requires model"
     end
   end
   if cfg.mappings ~= nil and cfg.mappings ~= false and type(cfg.mappings) ~= "table" then

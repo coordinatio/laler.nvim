@@ -7,7 +7,7 @@ Write prompts, notes, or prose in Neovim and get a tight feedback loop on how na
 ## Requirements
 
 - Neovim **0.10+** (`vim.system`, `vim.diff`, `vim.json`)
-- One of: [pi](https://pi.dev/), [Cursor CLI](https://cursor.com/docs/cli/overview) (`agent`), or [OpenCode](https://opencode.ai/) — or a custom CLI
+- One of: [pi](https://pi.dev/), [Cursor CLI](https://cursor.com/docs/cli/overview) (`agent`), [OpenCode](https://opencode.ai/), an [OpenAI-compatible](https://platform.openai.com/docs/api-reference/chat) HTTP API (`curl` + `sh`), or a custom CLI
 - Optional picker: [fzf-lua](https://github.com/ibhagwan/fzf-lua) or [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)
 
 ## Install
@@ -55,11 +55,16 @@ Commands:
 
 ## Configuration
 
+The **openai** adapter (OpenAI-compatible HTTP) is the preferable built-in: it calls the API directly, so responses come back much faster. The CLI adapters (`pi`, `cursor`, `opencode`) are convenient if you already use those tools, but they add significantly higher response delays.
+
 ```lua
 require("laler").setup({
-  adapter = "pi", -- "cursor" | "opencode" | { name, model, thinking, cmd, args, env, build }
-  model = nil, -- optional CLI --model for pi, cursor, and opencode
+  adapter = "pi", -- prefer "openai" for speed; also "cursor" | "opencode" | { name, model, thinking, cmd, args, env, build }
+  model = nil, -- optional CLI --model for pi, cursor, and opencode; required HTTP model id for openai
   thinking = nil, -- optional; `false` disables model reasoning
+  base_url = nil, -- openai HTTP root; adapter table wins if both are set
+  api_key_env = nil, -- openai key env name; adapter table wins if both are set
+  api_key_file = nil, -- openai key file; adapter table wins if both are set
   language = "en",
   n_variants = 3,
   default_prompt = "correct",
@@ -73,9 +78,9 @@ require("laler").setup({
 
 ### Model
 
-Built-in adapters pass `--model NAME` to the CLI when `model` is set. Omit it to use the CLI default.
+Built-in adapters pass `--model NAME` to the CLI when `model` is set. Omit it to use the CLI default. The **openai** adapter does not use `--model`: `model` is the HTTP model id and is **required**.
 
-If both top-level `model` and `adapter.model` are set on an adapter table, **`adapter.model` takes precedence**.
+If both top-level `model` and `adapter.model` are set on an adapter table, **`adapter.model` takes precedence**. The same rule applies to `base_url`, `api_key_env`, and `api_key_file` on the **openai** adapter.
 
 ```lua
 -- pi (same flag as `pi --model alibaba-cloud/qwen3.8-flash`)
@@ -95,6 +100,12 @@ require("laler").setup({
   adapter = "opencode",
   model = "anthropic/claude-sonnet-4-5",
 })
+
+-- OpenAI-compatible HTTP (`POST {base_url}/chat/completions`; model is the API id)
+require("laler").setup({
+  adapter = "openai",
+  model = "gpt-4o-mini",
+})
 ```
 
 Same option on a named built-in table (keeps the adapter's default flags):
@@ -110,11 +121,11 @@ require("laler").setup({
 
 ### Thinking
 
-Set `thinking = false` to disable model reasoning. Omit it (or set `true`) to leave the CLI default.
+Set `thinking = false` to disable model reasoning. Omit it (or set `true`) to leave the CLI / provider default.
 
 If both top-level `thinking` and `adapter.thinking` are set on an adapter table, **`adapter.thinking` takes precedence**.
 
-Generic adapters (custom `cmd` / `args` tables) use pi-style `--thinking off` when `thinking = false`. Only the built-in **opencode** adapter uses `--variant none` instead (best-effort: some models may still emit reasoning).
+Generic adapters (custom `cmd` / `args` tables) use pi-style `--thinking off` when `thinking = false`. Only the built-in **opencode** adapter uses `--variant none` instead (best-effort: some models may still emit reasoning). The **openai** adapter is non-streaming. On a DashScope host (DNS label `dashscope` or `dashscope-…`, e.g. `dashscope-intl.aliyuncs.com`), omit and `false` both send `enable_thinking: false`; `thinking = true` is an error. On other OpenAI-compatible hosts and on `api.openai.com`, the field is omitted (`thinking = false` is a no-op; that field would 400).
 
 ```lua
 -- pi: `--thinking off`
@@ -135,6 +146,14 @@ require("laler").setup({
 require("laler").setup({
   adapter = "cursor",
   model = "gpt-5",
+  thinking = false,
+})
+
+-- openai / DashScope: omit or false both send enable_thinking: false; true errors
+require("laler").setup({
+  adapter = "openai",
+  model = "qwen3.8-flash",
+  base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
   thinking = false,
 })
 ```
@@ -173,14 +192,50 @@ Prompt delivery:
 
 - **pi** and **opencode:** composed prompt on **stdin**
 - **cursor:** composed prompt as a **positional argv** argument (`agent -p` ignores stdin)
+- **openai:** chat-completions JSON on **stdin** (`messages[].content` is the composed prompt)
 
 Built-in adapters disable agent tools so they do not edit files:
 
 - **pi:** `-p --no-tools --no-session --no-context-files --no-skills` (and `--no-extensions` when no `model` is set; pi needs extensions to resolve `provider/model` IDs)
 - **cursor:** `-p --mode ask --output-format text --trust --sandbox enabled` (ask is read-only; workspace trust for headless; not `--force`)
 - **opencode:** `run --format default --pure`, plus `OPENCODE_PERMISSION` deny-all (no `--permissions` flag; that option is not on `run`)
+- **openai:** `exec curl` via `sh -c` to `POST {base_url}/chat/completions` (default `https://api.openai.com/v1`; do not append if the path already ends with `/chat/completions`, including when a `?query` follows). Requires `curl` and `sh` on PATH. The API key is never placed on argv. Precedence: if `api_key_env` is set and that env var is non-empty, use it; if the env var is empty/unset, fall back to `api_key_file` when set. Else `api_key_file`. Else, when the URL **host** is `api.openai.com` (nil `base_url` or an explicit official URL such as `https://api.openai.com/v1`), `OPENAI_API_KEY`. Else omit `Authorization`. Other hosts do not use `OPENAI_API_KEY`; set `api_key_env` / `api_key_file` or omit auth. `model` is required (HTTP id: `qwen3.8-flash`, not `alibaba-cloud/qwen3.8-flash`). Top-level `base_url` / `api_key_env` / `api_key_file` work like `model`; on an adapter table, the table fields win.
 
-When `model` is set, each of those invocations also gets `--model NAME` (for cursor, before the positional prompt). When `thinking` is `false`, pi also gets `--thinking off` and opencode gets `--variant none`. Cursor has no thinking flag.
+When `model` is set, CLI built-ins also get `--model NAME` (for cursor, before the positional prompt). When `thinking` is `false`, pi also gets `--thinking off` and opencode gets `--variant none`. Cursor has no thinking flag. The openai adapter sends `enable_thinking: false` on a DashScope host (DNS label `dashscope` or `dashscope-…`) when thinking is omit or `false`; `thinking = true` is an error there (non-streaming). On other OpenAI-compatible hosts and on `api.openai.com`, the field is omitted.
+
+### OpenAI-compatible HTTP
+
+Prefer this adapter when you can: a direct HTTP call is substantially faster than spinning up pi, Cursor CLI, or OpenCode for each correction.
+
+```lua
+-- Official OpenAI: key from OPENAI_API_KEY when the host is api.openai.com
+-- (default URL or an explicit official base_url). thinking = false is a no-op.
+require("laler").setup({
+  adapter = "openai",
+  model = "gpt-4o-mini",
+})
+
+-- Top-level extras (same as adapter-table fields; table wins if both are set)
+require("laler").setup({
+  adapter = "openai",
+  model = "qwen3.8-flash",
+  base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  api_key_env = "DASHSCOPE_API_KEY",
+  thinking = false,
+})
+
+-- Compatible server: env, with file as fallback
+require("laler").setup({
+  adapter = {
+    name = "openai",
+    model = "qwen3.8-flash",
+    base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    api_key_env = "DASHSCOPE_API_KEY",
+    api_key_file = "~/.config/laler/dashscope.key",
+  },
+  thinking = false,
+})
+```
 
 ## Built-in prompts
 

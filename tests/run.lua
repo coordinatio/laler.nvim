@@ -244,6 +244,16 @@ do
   assert_eq(cfg_model.adapter, "pi", "model merge keeps adapter")
   local cfg_think = config.merge({ thinking = false })
   assert_eq(cfg_think.thinking, false, "merge thinking false")
+  local cfg_url = config.merge({ base_url = "http://127.0.0.1:11434/v1" })
+  assert_eq(cfg_url.base_url, "http://127.0.0.1:11434/v1", "merge base_url")
+  local cfg_key = config.merge({ api_key_env = "MY_KEY", api_key_file = "/tmp/k" })
+  assert_eq(cfg_key.api_key_env, "MY_KEY", "merge api_key_env")
+  assert_eq(cfg_key.api_key_file, "/tmp/k", "merge api_key_file")
+  local user_adapter = { name = "openai", model = "  gpt-4o-mini  " }
+  local cfg_copy = config.merge({ adapter = user_adapter })
+  assert_true(cfg_copy.adapter ~= user_adapter, "merge copies adapter table")
+  assert_eq(user_adapter.model, "  gpt-4o-mini  ", "merge does not mutate caller adapter")
+  assert_eq(cfg_copy.adapter.model, "  gpt-4o-mini  ", "merge copy keeps adapter.model")
   local ok, err = config.validate({ n_variants = 0 })
   assert_true(not ok, "rejects bad n_variants")
   assert_true(type(err) == "string", "validate err")
@@ -503,12 +513,20 @@ do
   ok, err = config.validate({ model = "" })
   assert_true(not ok, "rejects empty model")
   assert_true(type(err) == "string" and err:find("model", 1, true) ~= nil, "empty model err")
+  ok, err = config.validate({ model = "   " })
+  assert_true(not ok, "rejects whitespace-only model")
   ok, err = config.validate({ model = 1 })
   assert_true(not ok, "rejects numeric model")
   ok, err = config.validate({ model = "alibaba-cloud/qwen3.8-flash" })
   assert_true(ok, "accepts string model")
+  local padded_model = { model = "  alibaba-cloud/qwen3.8-flash  " }
+  ok, err = config.validate(padded_model)
+  assert_true(ok, "accepts padded model")
+  assert_eq(padded_model.model, "alibaba-cloud/qwen3.8-flash", "validate trims model")
   ok, err = config.validate({ adapter = { name = "pi", model = "" } })
   assert_true(not ok, "rejects empty adapter.model")
+  ok, err = config.validate({ adapter = { name = "pi", model = "  \t  " } })
+  assert_true(not ok, "rejects whitespace-only adapter.model")
   ok, err = config.validate({ adapter = { name = "pi", model = "alibaba-cloud/qwen3.8-flash" } })
   assert_true(ok, "accepts adapter.model")
   ok, err = config.validate({ thinking = "off" })
@@ -522,6 +540,86 @@ do
   assert_true(not ok, "rejects string adapter.thinking")
   ok, err = config.validate({ adapter = { name = "pi", thinking = false } })
   assert_true(ok, "accepts adapter.thinking false")
+  ok, err = config.validate({ base_url = "" })
+  assert_true(not ok, "rejects empty top-level base_url")
+  assert_true(type(err) == "string" and err:find("base_url", 1, true) ~= nil, "empty base_url err")
+  ok, err = config.validate({ base_url = "  \n  " })
+  assert_true(not ok, "rejects whitespace-only top-level base_url")
+  ok, err = config.validate({ api_key_env = "" })
+  assert_true(not ok, "rejects empty top-level api_key_env")
+  ok, err = config.validate({ api_key_env = "   " })
+  assert_true(not ok, "rejects whitespace-only top-level api_key_env")
+  ok, err = config.validate({ api_key_file = 1 })
+  assert_true(not ok, "rejects numeric top-level api_key_file")
+  local padded_extras = {
+    adapter = "openai",
+    model = "  gpt-4o-mini  ",
+    base_url = "  https://api.openai.com/v1  ",
+    api_key_env = "  MY_KEY  ",
+    api_key_file = "  ~/.config/laler/key  ",
+  }
+  ok, err = config.validate(padded_extras)
+  assert_true(ok, "accepts padded openai extras")
+  assert_eq(padded_extras.model, "gpt-4o-mini", "validate trims openai model")
+  assert_eq(padded_extras.base_url, "https://api.openai.com/v1", "validate trims base_url")
+  assert_eq(padded_extras.api_key_env, "MY_KEY", "validate trims api_key_env")
+  assert_eq(padded_extras.api_key_file, "~/.config/laler/key", "validate trims api_key_file")
+  ok, err = config.validate({
+    adapter = "openai",
+    model = "gpt-4o-mini",
+    base_url = "http://127.0.0.1:11434/v1",
+    api_key_env = "MY_KEY",
+    api_key_file = "~/.config/laler/key",
+  })
+  assert_true(ok, "accepts top-level openai extras")
+  ok, err = config.validate({ adapter = { name = "openai", base_url = "" } })
+  assert_true(not ok, "rejects empty adapter.base_url")
+  ok, err = config.validate({ adapter = { name = "openai", base_url = "   " } })
+  assert_true(not ok, "rejects whitespace-only adapter.base_url")
+  ok, err = config.validate({ adapter = { name = "openai", api_key_env = "" } })
+  assert_true(not ok, "rejects empty adapter.api_key_env")
+  local user_adapter_pad = {
+    name = "openai",
+    model = "  gpt-4o-mini  ",
+    base_url = "  http://127.0.0.1:11434/v1  ",
+  }
+  local padded_adapter = config.merge({ adapter = user_adapter_pad })
+  ok, err = config.validate(padded_adapter)
+  assert_true(ok, "accepts padded adapter extras")
+  assert_true(padded_adapter.adapter ~= user_adapter_pad, "validate trims merge copy not caller adapter")
+  assert_eq(padded_adapter.adapter.model, "gpt-4o-mini", "validate trims adapter.model")
+  assert_eq(padded_adapter.adapter.base_url, "http://127.0.0.1:11434/v1", "validate trims adapter.base_url")
+  assert_eq(user_adapter_pad.model, "  gpt-4o-mini  ", "validate does not mutate caller adapter.model")
+  assert_eq(user_adapter_pad.base_url, "  http://127.0.0.1:11434/v1  ", "validate does not mutate caller adapter.base_url")
+  ok, err = config.validate({ adapter = { name = "openai", api_key_file = 1 } })
+  assert_true(not ok, "rejects numeric adapter.api_key_file")
+  ok, err = config.validate({ adapter = "openai" })
+  assert_true(not ok, "rejects openai without model")
+  assert_true(type(err) == "string" and err:find("model", 1, true) ~= nil, "openai missing model err")
+  ok, err = config.validate({ adapter = { name = "openai" } })
+  assert_true(not ok, "rejects openai table without model")
+  ok, err = config.validate({ adapter = "openai", model = "gpt-4o-mini" })
+  assert_true(ok, "accepts openai string with top-level model")
+  ok, err = config.validate({ adapter = { name = "openai" }, model = "gpt-4o-mini" })
+  assert_true(ok, "accepts openai table with top-level model")
+  ok, err = config.validate({
+    adapter = {
+      name = "openai",
+      cmd = "my-llm",
+      args = { "--print" },
+    },
+  })
+  assert_true(ok, "generic named openai does not require model")
+  ok, err = config.validate({
+    adapter = {
+      name = "openai",
+      model = "qwen3.8-flash",
+      base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      api_key_env = "DASHSCOPE_API_KEY",
+      api_key_file = "~/.config/laler/dashscope.key",
+    },
+  })
+  assert_true(ok, "accepts openai adapter extras")
 end
 
 -- cursor: prompt as last argv, empty stdin; opencode/pi stay stdin-only
@@ -565,6 +663,483 @@ do
   assert_true(not vim.tbl_contains(ospec.args, "--model"), "opencode default has no --model")
   assert_true(not vim.tbl_contains(ospec.args, "--variant"), "opencode default has no --variant")
   assert_true(not vim.tbl_contains(ospec.args, "--thinking"), "opencode default has no --thinking")
+end
+
+-- openai adapter: curl JobSpec, env/file key, unwrap
+do
+  local openai = require("laler.llm.openai")
+  local llm = require("laler.llm")
+  local test_env = "LALER_TEST_OPENAI_KEY"
+  vim.env[test_env] = nil
+
+  local function decode_body(spec)
+    local ok, data = pcall(vim.json.decode, spec.stdin)
+    assert_true(ok and type(data) == "table", "openai stdin is JSON")
+    return data
+  end
+
+  local function argv_blob(spec)
+    return spec.cmd .. "\0" .. table.concat(spec.args or {}, "\0")
+  end
+
+  local missing_ok, missing_err = pcall(openai.new, {})
+  assert_true(not missing_ok, "openai new requires model")
+  assert_true(tostring(missing_err):find("model", 1, true) ~= nil, "openai missing model err")
+  local ws_ok, ws_err = pcall(openai.new, { model = "   " })
+  assert_true(not ws_ok, "openai new rejects whitespace-only model")
+  assert_true(tostring(ws_err):find("model", 1, true) ~= nil, "openai whitespace model err")
+
+  vim.env[test_env] = "env-secret-key"
+  local client = openai.new({
+    model = "qwen3.8-flash",
+    base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  local spec = client:request("hi")
+  assert_eq(spec.cmd, "sh", "openai cmd sh")
+  assert_eq(spec.args[1], "-c", "openai sh -c")
+  assert_true(type(spec.args[2]) == "string" and spec.args[2]:find("^exec curl ", 1) ~= nil, "openai exec curl")
+  assert_true(spec.args[2]:find("^exec curl %-q %-sS %-g ", 1) ~= nil, "openai curl -q first then -sS -g")
+  assert_true(spec.args[2]:find("--data-binary @-", 1, true) ~= nil, "openai stdin body")
+  assert_true(spec.args[2]:find("%s%-g%s") ~= nil, "openai curl has -g globoff")
+  assert_true(spec.args[2]:find("%s%-f%s") == nil, "openai curl has no -f")
+  assert_eq(spec.env.LALER_OPENAI_URL, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", "openai strips slash and appends chat/completions")
+  assert_eq(spec.env.LALER_OPENAI_KEY, "env-secret-key", "openai key from env")
+  assert_true(not argv_blob(spec):find("env-secret-key", 1, true), "openai key not in argv")
+  assert_true(not argv_blob(spec):find("dashscope-intl", 1, true), "openai url not in argv")
+  assert_true(not spec.stdin:find("env-secret-key", 1, true), "openai key not in stdin")
+  local body = decode_body(spec)
+  assert_eq(body.model, "qwen3.8-flash", "openai JSON model is API id")
+  assert_eq(body.stream, false, "openai stream false")
+  assert_eq(body.messages[1].role, "user", "openai user role")
+  assert_eq(body.messages[1].content, "hi", "openai composed in JSON messages")
+  assert_eq(body.enable_thinking, false, "openai enable_thinking when thinking false and dashscope host")
+
+  local ds_omit = openai.new({
+    model = "qwen3.8-flash",
+    base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    api_key_env = test_env,
+  })
+  assert_eq(
+    decode_body(ds_omit:request("x")).enable_thinking,
+    false,
+    "openai enable_thinking when thinking omitted on dashscope"
+  )
+  local ds_true_ok, ds_true_err = pcall(openai.new, {
+    model = "qwen3.8-flash",
+    base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    thinking = true,
+  })
+  assert_true(not ds_true_ok, "openai rejects thinking true on dashscope")
+  assert_true(tostring(ds_true_err):find("thinking", 1, true) ~= nil, "openai dashscope thinking true err")
+  assert_true(tostring(ds_true_err):find("non-streaming", 1, true) ~= nil, "openai dashscope thinking true mentions non-streaming")
+
+  local not_ds = openai.new({
+    model = "local-model",
+    base_url = "https://notdashscope.example/v1",
+    api_key_env = test_env,
+  })
+  assert_true(
+    decode_body(not_ds:request("x")).enable_thinking == nil,
+    "openai omits enable_thinking for notdashscope substring host"
+  )
+  local ds_suffix = openai.new({
+    model = "local-model",
+    base_url = "https://dashscoped.example/v1",
+    api_key_env = test_env,
+  })
+  assert_true(
+    decode_body(ds_suffix:request("x")).enable_thinking == nil,
+    "openai omits enable_thinking for dashscoped label"
+  )
+  local nested_ds = openai.new({
+    model = "qwen3.8-flash",
+    base_url = "https://foo.dashscope.aliyuncs.com/v1",
+    api_key_env = test_env,
+  })
+  assert_eq(
+    decode_body(nested_ds:request("x")).enable_thinking,
+    false,
+    "openai enable_thinking when dashscope is a DNS label"
+  )
+
+  local ollama_off = openai.new({
+    model = "local-model",
+    base_url = "http://127.0.0.1:11434/v1",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  assert_true(
+    decode_body(ollama_off:request("x")).enable_thinking == nil,
+    "openai omits enable_thinking for non-dashscope custom host"
+  )
+  local groq_off = openai.new({
+    model = "llama-3.1-8b-instant",
+    base_url = "https://api.groq.com/openai/v1",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  assert_true(
+    decode_body(groq_off:request("x")).enable_thinking == nil,
+    "openai omits enable_thinking for groq"
+  )
+  local ds_case = openai.new({
+    model = "qwen3.8-flash",
+    base_url = "https://DASHSCOPE.aliyuncs.com/compatible-mode/v1",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  assert_eq(
+    decode_body(ds_case:request("x")).enable_thinking,
+    false,
+    "openai enable_thinking is case-insensitive on dashscope host"
+  )
+  local ds_scheme_case = openai.new({
+    model = "qwen3.8-flash",
+    base_url = "HTTPS://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  assert_eq(
+    decode_body(ds_scheme_case:request("x")).enable_thinking,
+    false,
+    "openai enable_thinking with uppercase HTTPS scheme on dashscope"
+  )
+
+  local official_off = openai.new({
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  local offbody = decode_body(official_off:request("x"))
+  assert_true(offbody.enable_thinking == nil, "openai omits enable_thinking on default host")
+  assert_eq(offbody.stream, false, "openai stream false on default host")
+  local official_url = openai.new({
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+    base_url = "https://api.openai.com/v1",
+    thinking = false,
+  })
+  assert_true(
+    decode_body(official_url:request("x")).enable_thinking == nil,
+    "openai omits enable_thinking for api.openai.com"
+  )
+
+  local no_think = openai.new({
+    model = "qwen3.8-flash",
+    api_key_env = test_env,
+    thinking = true,
+  })
+  local ntbody = decode_body(no_think:request("x"))
+  assert_true(ntbody.enable_thinking == nil, "openai omits enable_thinking when thinking true")
+  local default_think = openai.new({
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+  })
+  local dtbody = decode_body(default_think:request("x"))
+  assert_true(dtbody.enable_thinking == nil, "openai omits enable_thinking by default")
+  assert_eq(default_think:request("x").env.LALER_OPENAI_URL, "https://api.openai.com/v1/chat/completions", "openai default base_url")
+  local full_url = openai.new({
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+    base_url = "https://api.openai.com/v1/chat/completions/",
+  })
+  assert_eq(full_url:request("x").env.LALER_OPENAI_URL, "https://api.openai.com/v1/chat/completions", "openai does not double chat/completions")
+  local query_url = openai.new({
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+    base_url = "https://example.com/v1/chat/completions?api-version=2024-10-01",
+  })
+  assert_eq(
+    query_url:request("x").env.LALER_OPENAI_URL,
+    "https://example.com/v1/chat/completions?api-version=2024-10-01",
+    "openai keeps query and does not double chat/completions"
+  )
+  local query_slash = openai.new({
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+    base_url = "https://example.com/v1/chat/completions/?api-version=1",
+  })
+  assert_eq(
+    query_slash:request("x").env.LALER_OPENAI_URL,
+    "https://example.com/v1/chat/completions?api-version=1",
+    "openai strips slash before query without doubling"
+  )
+  local ipv6 = openai.new({
+    model = "local-model",
+    base_url = "http://[::1]:11434/v1",
+  })
+  local ipv6spec = ipv6:request("x")
+  assert_eq(ipv6spec.env.LALER_OPENAI_URL, "http://[::1]:11434/v1/chat/completions", "openai keeps IPv6 host")
+  assert_true(decode_body(ipv6spec).enable_thinking == nil, "ipv6 is not dashscope")
+  assert_true(ipv6spec.env.LALER_OPENAI_KEY == nil, "ipv6 is not official openai")
+  local padded_url = openai.new({
+    model = "  gpt-4o-mini  ",
+    api_key_env = test_env,
+    base_url = "  https://api.openai.com/v1  ",
+  })
+  assert_eq(
+    padded_url:request("x").env.LALER_OPENAI_URL,
+    "https://api.openai.com/v1/chat/completions",
+    "padded base_url is trimmed"
+  )
+  assert_eq(decode_body(padded_url:request("x")).model, "gpt-4o-mini", "padded model is trimmed")
+
+  local path = vim.fn.tempname()
+  local f = assert(io.open(path, "w"))
+  f:write("\n  file-secret-key  \nsecond-line-ignored\n")
+  f:close()
+  vim.env[test_env] = nil
+  local from_file = openai.new({
+    model = "qwen3.8-flash",
+    api_key_env = test_env,
+    api_key_file = path,
+  })
+  local fspec = from_file:request("hi")
+  assert_eq(fspec.env.LALER_OPENAI_KEY, "file-secret-key", "openai key from first non-empty line")
+  assert_true(not argv_blob(fspec):find("file-secret-key", 1, true), "file key not in argv")
+  assert_true(fspec.args[2]:find("Authorization", 1, true) ~= nil, "file key uses auth script")
+
+  vim.env[test_env] = "env-wins-key"
+  local both = openai.new({
+    model = "qwen3.8-flash",
+    api_key_env = test_env,
+    api_key_file = path,
+  })
+  assert_eq(both:request("hi").env.LALER_OPENAI_KEY, "env-wins-key", "openai env wins over file")
+
+  local saved_openai_key = vim.env.OPENAI_API_KEY
+  vim.env.OPENAI_API_KEY = "default-openai-key"
+  local file_only = openai.new({
+    model = "qwen3.8-flash",
+    api_key_file = path,
+  })
+  assert_eq(file_only:request("hi").env.LALER_OPENAI_KEY, "file-secret-key", "openai file wins over default OPENAI_API_KEY")
+  local default_key = openai.new({ model = "gpt-4o-mini" })
+  assert_eq(default_key:request("x").env.LALER_OPENAI_KEY, "default-openai-key", "openai default OPENAI_API_KEY")
+  local official_url_key = openai.new({
+    model = "gpt-4o-mini",
+    base_url = "https://api.openai.com/v1",
+  })
+  assert_eq(
+    official_url_key:request("x").env.LALER_OPENAI_KEY,
+    "default-openai-key",
+    "openai OPENAI_API_KEY on explicit api.openai.com"
+  )
+  local official_userinfo = openai.new({
+    model = "gpt-4o-mini",
+    base_url = "https://user:pass@api.openai.com/v1",
+  })
+  assert_eq(
+    official_userinfo:request("x").env.LALER_OPENAI_KEY,
+    "default-openai-key",
+    "openai OPENAI_API_KEY with userinfo on api.openai.com"
+  )
+  local official_fqdn = openai.new({
+    model = "gpt-4o-mini",
+    base_url = "https://api.openai.com./v1",
+  })
+  assert_eq(
+    official_fqdn:request("x").env.LALER_OPENAI_KEY,
+    "default-openai-key",
+    "openai OPENAI_API_KEY on trailing-dot FQDN"
+  )
+  local official_scheme_case = openai.new({
+    model = "gpt-4o-mini",
+    base_url = "HTTPS://api.openai.com/v1",
+  })
+  assert_eq(
+    official_scheme_case:request("x").env.LALER_OPENAI_KEY,
+    "default-openai-key",
+    "openai OPENAI_API_KEY with uppercase HTTPS scheme"
+  )
+  local official_http_case = openai.new({
+    model = "gpt-4o-mini",
+    base_url = "Http://api.openai.com/v1",
+  })
+  assert_eq(
+    official_http_case:request("x").env.LALER_OPENAI_KEY,
+    "default-openai-key",
+    "openai OPENAI_API_KEY with mixed-case Http scheme"
+  )
+  local custom_no_key = openai.new({
+    model = "local-model",
+    base_url = "http://127.0.0.1:11434/v1",
+  })
+  assert_true(
+    custom_no_key:request("x").env.LALER_OPENAI_KEY == nil,
+    "non-official host does not use OPENAI_API_KEY"
+  )
+  assert_true(
+    not custom_no_key:request("x").args[2]:find("Authorization", 1, true),
+    "custom base_url omits Authorization without explicit key"
+  )
+  local custom_file = openai.new({
+    model = "local-model",
+    base_url = "http://127.0.0.1:11434/v1",
+    api_key_file = path,
+  })
+  assert_eq(custom_file:request("x").env.LALER_OPENAI_KEY, "file-secret-key", "custom base_url uses explicit api_key_file")
+  vim.env[test_env] = nil
+  local skip_default = openai.new({
+    model = "local-model",
+    api_key_env = test_env,
+  })
+  assert_true(skip_default:request("hi").env.LALER_OPENAI_KEY == nil, "explicit empty api_key_env skips OPENAI_API_KEY")
+  os.remove(path)
+  vim.env[test_env] = nil
+  vim.env.OPENAI_API_KEY = saved_openai_key
+
+  local no_key = openai.new({
+    model = "local-model",
+    api_key_env = test_env,
+  })
+  local nkspec = no_key:request("hi")
+  assert_true(nkspec.env.LALER_OPENAI_KEY == nil, "openai omits key env when unset")
+  assert_true(not nkspec.args[2]:find("Authorization", 1, true), "openai omits Authorization without key")
+
+  local ok_file, err_file = pcall(function()
+    openai.new({
+      model = "qwen3.8-flash",
+      api_key_env = test_env,
+      api_key_file = "/no/such/laler-openai-key",
+    }):request("x")
+  end)
+  assert_true(not ok_file, "openai missing key file errors")
+  assert_true(tostring(err_file):find("api_key_file", 1, true) ~= nil, "openai missing key file mentions api_key_file")
+
+  local named = llm.resolve({
+    name = "openai",
+    model = "qwen3.8-flash",
+    base_url = "http://127.0.0.1:11434/v1",
+    api_key_env = test_env,
+  })
+  assert_eq(named.name, "openai", "named builtin openai")
+  vim.env[test_env] = "named-key"
+  local nspec = named:request("composed-text")
+  assert_eq(nspec.env.LALER_OPENAI_URL, "http://127.0.0.1:11434/v1/chat/completions", "named builtin forwards base_url")
+  assert_eq(nspec.env.LALER_OPENAI_KEY, "named-key", "named builtin forwards api_key_env")
+  assert_eq(decode_body(nspec).messages[1].content, "composed-text", "named builtin stdin prompt")
+  vim.env[test_env] = nil
+
+  local via_string = llm.resolve("openai", {
+    model = "gpt-4o-mini",
+    api_key_env = test_env,
+  })
+  assert_eq(via_string.name, "openai", "resolve string openai")
+  assert_eq(decode_body(via_string:request("z")).model, "gpt-4o-mini", "resolve string openai model")
+
+  local via_pad = llm.resolve("openai", {
+    model = "  gpt-4o-mini  ",
+    api_key_env = test_env,
+    base_url = "  https://api.openai.com/v1  ",
+  })
+  assert_eq(decode_body(via_pad:request("z")).model, "gpt-4o-mini", "resolve trims model")
+  assert_eq(
+    via_pad:request("z").env.LALER_OPENAI_URL,
+    "https://api.openai.com/v1/chat/completions",
+    "resolve trims base_url"
+  )
+
+  local ok_unwrap, content = pcall(openai.unwrap_stdout, vim.json.encode({
+    choices = {
+      { message = { content = '{"variants":[{"text":"Hello"}]}' } },
+    },
+  }))
+  assert_true(ok_unwrap, "unwrap success")
+  assert_eq(content, '{"variants":[{"text":"Hello"}]}', "unwrap content")
+
+  local ok_api, api_err = pcall(openai.unwrap_stdout, '{"error":{"message":"nope"}}')
+  assert_true(not ok_api, "unwrap API error")
+  assert_eq(api_err, "nope", "unwrap API error message")
+
+  local ok_parts, parts_content = pcall(openai.unwrap_stdout, vim.json.encode({
+    choices = {
+      {
+        message = {
+          content = {
+            { type = "text", text = '{"variants":[' },
+            { type = "image_url", image_url = { url = "x" } },
+            { type = "text", text = '{"text":"Hi"}]}' },
+          },
+        },
+      },
+    },
+  }))
+  assert_true(ok_parts, "unwrap content parts")
+  assert_eq(parts_content, '{"variants":[{"text":"Hi"}]}', "unwrap joins part.text")
+
+  local ok_str_parts, str_parts = pcall(openai.unwrap_stdout, vim.json.encode({
+    choices = {
+      {
+        message = {
+          content = {
+            '{"variants":[',
+            { type = "text", text = '{"text":' },
+            '"Hi"}]}',
+          },
+        },
+      },
+    },
+  }))
+  assert_true(ok_str_parts, "unwrap string content parts")
+  assert_eq(str_parts, '{"variants":[{"text":"Hi"}]}', "unwrap joins string parts and part.text")
+
+  local ok_one_part, one_part = pcall(openai.unwrap_stdout, vim.json.encode({
+    choices = {
+      {
+        message = {
+          content = { type = "text", text = '{"variants":[{"text":"One"}]}' },
+        },
+      },
+    },
+  }))
+  assert_true(ok_one_part, "unwrap single content part object")
+  assert_eq(one_part, '{"variants":[{"text":"One"}]}', "unwrap uses content.text on part object")
+
+  local ok_err_null, null_err_content = pcall(
+    openai.unwrap_stdout,
+    '{"error":null,"choices":[{"message":{"content":"ok"}}]}'
+  )
+  assert_true(ok_err_null, "unwrap error null is success")
+  assert_eq(null_err_content, "ok", "unwrap error null uses content")
+
+  local ok_ref, ref_err = pcall(openai.unwrap_stdout, '{"choices":[{"message":{"content":null,"refusal":"nope I refuse"}}]}')
+  assert_true(not ok_ref, "unwrap refusal")
+  assert_eq(ref_err, "nope I refuse", "unwrap refusal message")
+
+  local ok_nil, nil_err = pcall(openai.unwrap_stdout, '{"choices":[{"message":{"content":null}}]}')
+  assert_true(not ok_nil, "unwrap null content")
+  assert_true(tostring(nil_err):find("missing content", 1, true) ~= nil, "unwrap null content err")
+
+  local ok_empty, empty_err = pcall(openai.unwrap_stdout, '{"choices":[{"message":{"content":""}}]}')
+  assert_true(not ok_empty, "unwrap empty content")
+  assert_true(tostring(empty_err):find("missing content", 1, true) ~= nil, "unwrap empty content err")
+
+  local ok_reason, reason_err = pcall(openai.unwrap_stdout, vim.json.encode({
+    choices = {
+      { message = { content = "", reasoning_content = '{"variants":[{"text":"R"}]}' } },
+    },
+  }))
+  assert_true(not ok_reason, "unwrap empty content ignores reasoning_content")
+  assert_true(tostring(reason_err):find("missing content", 1, true) ~= nil, "unwrap reasoning_content not used")
+
+  local ok_null_r, null_r_err = pcall(openai.unwrap_stdout, '{"choices":[{"message":{"content":null,"reasoning_content":"from-reason"}}]}')
+  assert_true(not ok_null_r, "unwrap null content ignores reasoning_content")
+  assert_true(tostring(null_r_err):find("missing content", 1, true) ~= nil, "unwrap null content not reasoning")
+
+  local ok_pref, pref = pcall(openai.unwrap_stdout, vim.json.encode({
+    choices = {
+      { message = { content = '{"variants":[{"text":"C"}]}', reasoning_content = "nope" } },
+    },
+  }))
+  assert_true(ok_pref, "unwrap uses content when present")
+  assert_eq(pref, '{"variants":[{"text":"C"}]}', "unwrap content ignores reasoning_content")
+
+  local ok_bad, bad_err = pcall(openai.unwrap_stdout, "not-json")
+  assert_true(not ok_bad, "unwrap rejects non-JSON")
+  assert_true(tostring(bad_err):find("not JSON", 1, true) ~= nil, "unwrap non-JSON err")
 end
 
 -- --model for pi, cursor, and opencode
@@ -834,6 +1409,133 @@ do
   assert_true(not vim.tbl_contains(spec.args, "--no-extensions"), "setup llm omits --no-extensions with model")
 end
 
+-- setup wires openai top-level base_url / api_key_env / thinking
+do
+  local laler = require("laler")
+  local session = require("laler.session")
+  local test_env = "LALER_TEST_OPENAI_KEY"
+  vim.env[test_env] = "setup-secret"
+
+  local ok_setup = pcall(function()
+    laler.setup({
+      adapter = "openai",
+      model = "qwen3.8-flash",
+      base_url = "http://127.0.0.1:11434/v1",
+      api_key_env = test_env,
+      thinking = false,
+    })
+  end)
+  assert_true(ok_setup, "setup openai top-level extras")
+  assert_eq(laler._config.base_url, "http://127.0.0.1:11434/v1", "setup stores base_url")
+  assert_eq(laler._config.api_key_env, test_env, "setup stores api_key_env")
+  local ctx = session._ctx()
+  assert_true(ctx ~= nil and ctx.llm ~= nil, "setup binds openai ctx")
+  local spec = ctx.llm:request("hello")
+  assert_eq(spec.env.LALER_OPENAI_URL, "http://127.0.0.1:11434/v1/chat/completions", "setup forwards base_url")
+  assert_eq(spec.env.LALER_OPENAI_KEY, "setup-secret", "setup forwards api_key_env")
+  local ok_body, body = pcall(vim.json.decode, spec.stdin)
+  assert_true(ok_body and type(body) == "table", "setup openai stdin JSON")
+  assert_eq(body.model, "qwen3.8-flash", "setup openai model")
+  assert_eq(body.stream, false, "setup openai stream false")
+  assert_true(body.enable_thinking == nil, "setup non-dashscope custom base_url omits enable_thinking")
+  assert_eq(body.messages[1].content, "hello", "setup openai composed in JSON")
+
+  local ok_ds = pcall(function()
+    laler.setup({
+      adapter = "openai",
+      model = "qwen3.8-flash",
+      base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      api_key_env = test_env,
+      thinking = false,
+    })
+  end)
+  assert_true(ok_ds, "setup openai dashscope thinking")
+  spec = session._ctx().llm:request("hello")
+  ok_body, body = pcall(vim.json.decode, spec.stdin)
+  assert_true(ok_body and type(body) == "table", "setup dashscope stdin JSON")
+  assert_eq(body.enable_thinking, false, "setup dashscope sends enable_thinking")
+
+  local ok_ds_omit = pcall(function()
+    laler.setup({
+      adapter = "openai",
+      model = "qwen3.8-flash",
+      base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      api_key_env = test_env,
+    })
+  end)
+  assert_true(ok_ds_omit, "setup openai dashscope omit thinking")
+  spec = session._ctx().llm:request("hello")
+  ok_body, body = pcall(vim.json.decode, spec.stdin)
+  assert_true(ok_body and type(body) == "table", "setup dashscope omit stdin JSON")
+  assert_eq(body.enable_thinking, false, "setup dashscope omit thinking still sends enable_thinking")
+
+  local ok_ds_true = pcall(function()
+    laler.setup({
+      adapter = "openai",
+      model = "qwen3.8-flash",
+      base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      api_key_env = test_env,
+      thinking = true,
+    })
+  end)
+  assert_true(not ok_ds_true, "setup rejects thinking true on dashscope")
+
+  local ok_pad = pcall(function()
+    laler.setup({
+      adapter = "openai",
+      model = "  qwen3.8-flash  ",
+      base_url = "  http://127.0.0.1:11434/v1  ",
+      api_key_env = "  " .. test_env .. "  ",
+    })
+  end)
+  assert_true(ok_pad, "setup trims padded openai extras")
+  assert_eq(laler._config.model, "qwen3.8-flash", "setup stores trimmed model")
+  assert_eq(laler._config.base_url, "http://127.0.0.1:11434/v1", "setup stores trimmed base_url")
+  assert_eq(laler._config.api_key_env, test_env, "setup stores trimmed api_key_env")
+  spec = session._ctx().llm:request("hello")
+  assert_eq(spec.env.LALER_OPENAI_URL, "http://127.0.0.1:11434/v1/chat/completions", "setup padded base_url is trimmed")
+
+  local ok_win = pcall(function()
+    laler.setup({
+      adapter = {
+        name = "openai",
+        model = "adapter-model",
+        base_url = "http://adapter.example/v1",
+        api_key_env = test_env,
+      },
+      model = "top-model",
+      base_url = "http://top.example/v1",
+      thinking = false,
+    })
+  end)
+  assert_true(ok_win, "setup openai adapter table wins")
+  spec = session._ctx().llm:request("x")
+  assert_eq(spec.env.LALER_OPENAI_URL, "http://adapter.example/v1/chat/completions", "adapter.base_url wins")
+  ok_body, body = pcall(vim.json.decode, spec.stdin)
+  assert_true(ok_body and type(body) == "table", "adapter-win stdin JSON")
+  assert_eq(body.model, "adapter-model", "adapter.model wins")
+
+  local caller_adapter = {
+    name = "openai",
+    model = "  keep-padding  ",
+    base_url = "  http://caller.example/v1  ",
+    api_key_env = test_env,
+  }
+  local ok_caller = pcall(function()
+    laler.setup({ adapter = caller_adapter })
+  end)
+  assert_true(ok_caller, "setup openai from caller adapter table")
+  assert_eq(caller_adapter.model, "  keep-padding  ", "setup does not mutate caller adapter.model")
+  assert_eq(caller_adapter.base_url, "  http://caller.example/v1  ", "setup does not mutate caller adapter.base_url")
+  spec = session._ctx().llm:request("x")
+  assert_eq(spec.env.LALER_OPENAI_URL, "http://caller.example/v1/chat/completions", "setup uses trimmed adapter copy")
+  ok_body, body = pcall(vim.json.decode, spec.stdin)
+  assert_true(ok_body and type(body) == "table", "caller-adapter stdin JSON")
+  assert_eq(body.model, "keep-padding", "setup trims adapter.model on copy")
+
+  vim.env[test_env] = nil
+end
+
 -- job generation helper
 do
   local job = require("laler.job.vim_system")
@@ -969,6 +1671,83 @@ do
     print("FAIL extra: invalid bufnr threw " .. tostring(err_call))
   end
   assert_true(not threw, "invalid bufnr does not throw")
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+-- session unwrap_stdout before JSON parse
+do
+  local session = require("laler.session")
+  local jobs = { cbs = {} }
+  function jobs:start(_, cb)
+    self.cbs[#self.cbs + 1] = cb
+  end
+  function jobs:cancel() end
+  function jobs:is_running()
+    return false
+  end
+
+  local reviews = {}
+  local errors = {}
+  local view = {}
+  function view:open_loading() end
+  function view:show_review(state)
+    reviews[#reviews + 1] = state.variants[1].text
+  end
+  function view:show_error(msg)
+    errors[#errors + 1] = msg
+  end
+  function view:close() end
+
+  session.bind({
+    config = { language = "en", n_variants = 1 },
+    catalog = require("laler.prompt.catalog").new({}),
+    composer = require("laler.prompt.composer"),
+    llm = {
+      name = "openai",
+      request = function()
+        return { cmd = "true", args = {}, stdin = "" }
+      end,
+      unwrap_stdout = function(_, stdout)
+        return require("laler.llm.openai").unwrap_stdout(stdout)
+      end,
+    },
+    jobs = jobs,
+    parser = require("laler.parse.json"),
+    picker = { pick = function() end },
+    diff = require("laler.diff.vim_diff"),
+    view = view,
+    capture = require("laler.range"),
+    apply = {
+      apply = function()
+        return true
+      end,
+    },
+  })
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  local range = {
+    bufnr = buf,
+    mode = "line",
+    start_row = 0,
+    start_col = 0,
+    end_row = 0,
+    end_col = 0,
+    text = "hello",
+  }
+  session._start_job(range, "correct")
+  jobs.cbs[1].on_exit(true, vim.json.encode({
+    choices = {
+      { message = { content = '{"variants":[{"text":"UNWRAPPED"}]}' } },
+    },
+  }), "", 0)
+  assert_eq(#reviews, 1, "unwrap parse shows review")
+  assert_eq(reviews[1], "UNWRAPPED", "unwrap extracts assistant content")
+
+  session._start_job(range, "correct")
+  jobs.cbs[2].on_exit(true, '{"error":{"message":"nope"}}', "", 0)
+  assert_eq(#errors, 1, "unwrap API error shown")
+  assert_eq(errors[1], "nope", "unwrap API error message")
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 

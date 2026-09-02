@@ -20,17 +20,21 @@ INTRO                                                              *laler-intro*
 
 laler (Language Learner) helps you improve language use while writing in
 Neovim: select text, run a prompt through a CLI LLM (pi, Cursor agent,
-OpenCode, or custom), review several corrected variants with a delta-style
-diff and learning notes, then apply one with <CR>.
+OpenCode, OpenAI-compatible HTTP, or custom), review several corrected
+variants with a delta-style diff and learning notes, then apply one with
+<CR>.
 
 ==============================================================================
 SETUP                                                              *laler-setup*
 
 >lua
   require("laler").setup({
-    adapter = "pi",           -- "cursor" | "opencode" | custom table
-    model = nil,              -- optional CLI --model (all built-ins)
+    adapter = "pi",           -- "cursor" | "opencode" | "openai" | custom table
+    model = nil,              -- CLI --model; required HTTP id for openai
     thinking = nil,           -- optional; false disables reasoning
+    base_url = nil,           -- openai HTTP root; adapter table wins
+    api_key_env = nil,        -- openai key env; adapter table wins
+    api_key_file = nil,       -- openai key file; adapter table wins
     language = "en",
     n_variants = 3,
     default_prompt = "correct",
@@ -103,16 +107,36 @@ Built-ins (tools disabled so agents do not edit files):
              not `--force`)
   opencode   `opencode run --format default --pure`; OPENCODE_PERMISSION
              deny-all (no `--permissions` flag on `run`)
+  openai     `exec curl` via `sh -c` to `POST {base_url}/chat/completions`
+             (default `https://api.openai.com/v1`; not appended if the path
+             already ends with `/chat/completions`, including a following
+             `?query`). Requires `curl` and `sh`. Stdin is the chat-completions
+             JSON body (`messages[].content` is the composed prompt).
+             Key: if `api_key_env` is set and that env var is non-empty, use
+             it; if the env var is empty/unset, fall back to `api_key_file`
+             when set. Else `api_key_file`. Else, when the URL host is
+             `api.openai.com` (nil `base_url` or an explicit official URL),
+             `OPENAI_API_KEY`. Else omit `Authorization`. Never on argv.
+             Other hosts do not use `OPENAI_API_KEY`; set `api_key_env` /
+             `api_key_file` or omit auth. `model` is required
+             (HTTP id). Top-level `base_url` / `api_key_env` / `api_key_file`
+             work like `model`; on an adapter table, the table fields win.
 
-When `model` is set (top-level or `adapter.model`), built-ins add
+When `model` is set (top-level or `adapter.model`), CLI built-ins add
 `--model {name}`. For cursor it is inserted before the positional prompt.
+The openai adapter puts `model` in the JSON body instead and requires it.
 If both top-level `model` and `adapter.model` are set, `adapter.model` wins.
+The same rule applies to openai `base_url` / `api_key_env` / `api_key_file`.
 
 When `thinking` is `false` (top-level or `adapter.thinking`), pi adds
 `--thinking off` and opencode adds `--variant none` (best-effort: some models
-may still emit reasoning). Cursor has no thinking flag; choose a non-thinking
-model instead. If both top-level `thinking` and `adapter.thinking` are set,
-`adapter.thinking` wins.
+may still emit reasoning). The openai adapter is non-streaming. On a DashScope
+host (DNS label `dashscope` or `dashscope-…`, e.g. `dashscope-intl.aliyuncs.com`),
+omit and `false` both send `enable_thinking: false`; `thinking = true` is an
+error. On other OpenAI-compatible hosts and on `api.openai.com`, the field is
+omitted (`thinking = false` is a no-op; that field would 400). Cursor has no
+thinking flag; choose a non-thinking model instead. If both top-level
+`thinking` and `adapter.thinking` are set, `adapter.thinking` wins.
 
 Generic adapters (`cmd` / `args` tables) append `--thinking off` for
 `thinking = false` (pi-style). Only the built-in opencode adapter uses
@@ -134,6 +158,25 @@ Examples~
   require("laler").setup({
     adapter = "opencode",
     model = "anthropic/claude-sonnet-4-5",
+    thinking = false,
+  })
+
+  require("laler").setup({
+    adapter = "openai",
+    model = "qwen3.8-flash",
+    base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    api_key_env = "DASHSCOPE_API_KEY",
+    thinking = false,
+  })
+
+  require("laler").setup({
+    adapter = {
+      name = "openai",
+      model = "qwen3.8-flash",
+      base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      api_key_env = "DASHSCOPE_API_KEY",
+      api_key_file = "~/.config/laler/dashscope.key",
+    },
     thinking = false,
   })
 

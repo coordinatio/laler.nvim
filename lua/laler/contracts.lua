@@ -77,13 +77,19 @@
 ---@class laler.LlmClient
 ---@field name string
 ---@field request fun(self: laler.LlmClient, composed: string): laler.JobSpec
+---@field unwrap_stdout? fun(self: laler.LlmClient, stdout: string): string
 
 --- Generic adapter options. `model` / `thinking` apply to `cmd`+`args` adapters only;
 --- when `build` is set they are ignored (emit flags inside `build()`).
+--- `base_url` / `api_key_env` / `api_key_file` apply to the built-in openai adapter
+--- (top-level config or adapter table; adapter table wins).
 ---@class laler.AdapterOpts
 ---@field name? string
 ---@field model? string
 ---@field thinking? boolean
+---@field base_url? string
+---@field api_key_env? string
+---@field api_key_file? string
 ---@field cmd? string|string[]
 ---@field args? string[]
 ---@field env? table<string, string>
