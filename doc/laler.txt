@@ -131,10 +131,11 @@ The same rule applies to openai `base_url` / `api_key_env` / `api_key_file`.
 When `thinking` is `false` (top-level or `adapter.thinking`), pi adds
 `--thinking off` and opencode adds `--variant none` (best-effort: some models
 may still emit reasoning). The openai adapter is non-streaming. On a DashScope
-host (DNS label `dashscope` or `dashscope-…`, e.g. `dashscope-intl.aliyuncs.com`),
-omit and `false` both send `enable_thinking: false`; `thinking = true` is an
-error. On other OpenAI-compatible hosts and on `api.openai.com`, the field is
-omitted (`thinking = false` is a no-op; that field would 400). Cursor has no
+host (DNS label `dashscope` or `dashscope-…`, e.g. `dashscope-intl.aliyuncs.com`)
+or Alibaba MaaS (`maas.aliyuncs.com` / `*.maas.aliyuncs.com`), omit and `false`
+both send `enable_thinking: false`; `thinking = true` is an error. On other
+OpenAI-compatible hosts and on `api.openai.com`, the field is omitted
+(`thinking = false` is a no-op; that field would 400). Cursor has no
 thinking flag; choose a non-thinking model instead. If both top-level
 `thinking` and `adapter.thinking` are set, `adapter.thinking` wins.
 

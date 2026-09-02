@@ -75,6 +75,7 @@ end
 
 --- DashScope/Qwen compatible-mode (`enable_thinking` is only valid here).
 --- DNS label `dashscope` or `dashscope-…` (e.g. `dashscope-intl.aliyuncs.com`);
+--- Alibaba MaaS (`maas.aliyuncs.com` / `*.maas.aliyuncs.com`, e.g. token-plan);
 --- not a raw substring (`notdashscope.example`).
 ---@param base? string
 ---@return boolean
@@ -82,6 +83,9 @@ local function dashscope_host(base)
   local host = url_host(base)
   if host:sub(1, 1) == "[" then
     return false
+  end
+  if host == "maas.aliyuncs.com" or host:match("%.maas%.aliyuncs%.com$") then
+    return true
   end
   for label in host:gmatch("[^.]+") do
     if label == "dashscope" or label:sub(1, 10) == "dashscope-" then

@@ -763,6 +763,34 @@ do
     false,
     "openai enable_thinking when dashscope is a DNS label"
   )
+  local maas = openai.new({
+    model = "qwen3.8-flash",
+    base_url = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  assert_eq(
+    decode_body(maas:request("x")).enable_thinking,
+    false,
+    "openai enable_thinking on Alibaba MaaS token-plan host"
+  )
+  local maas_true_ok, maas_true_err = pcall(openai.new, {
+    model = "qwen3.8-flash",
+    base_url = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    thinking = true,
+  })
+  assert_true(not maas_true_ok, "openai rejects thinking true on Alibaba MaaS")
+  assert_true(tostring(maas_true_err):find("thinking", 1, true) ~= nil, "openai MaaS thinking true err")
+  local not_maas = openai.new({
+    model = "local-model",
+    base_url = "https://notmaas.aliyuncs.com/v1",
+    api_key_env = test_env,
+    thinking = false,
+  })
+  assert_true(
+    decode_body(not_maas:request("x")).enable_thinking == nil,
+    "openai omits enable_thinking for notmaas.aliyuncs.com"
+  )
 
   local ollama_off = openai.new({
     model = "local-model",
